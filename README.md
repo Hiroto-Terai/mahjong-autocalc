@@ -1,34 +1,43 @@
 # 麻雀 点数自動計算
 
-牌を並べた写真を渡すと、牌を認識して点数を計算するツールです。
-**外部の API を一切使わず、すべて手元のパソコンの中で完結します。**
+牌を並べた写真を渡すと、牌を認識して点数を計算します。
+**写真はどこにも送信しません。認識も計算も端末の中だけで完結します。**
 
-```
-写真 ──▶ 牌の切り出し ──▶ 牌の判別 ──▶ 点数計算 ──▶ 結果
-         (OpenCV)      (参照ライブラリ)   (符・翻・支払い)
-```
+使い方は 2 通りあります。
+
+| | 動かす場所 | 用途 |
+| --- | --- | --- |
+| **ブラウザ版** | スマホ / PC のブラウザだけ | 卓のそばで使う。PC もサーバーも要らない |
+| Python 版 | PC (ローカルサーバー / CLI) | まとめて処理したいとき、スクリプトから使いたいとき |
 
 ---
 
-## 使い方
+## ブラウザ版 (スマホ向け)
 
-### 1. 準備
+GitHub Pages に置いてあるページをスマホで開くだけです。インストール不要、
+**一度開けば機内モードでも動きます。**
 
-```bash
-pip install -r requirements.txt
-python app.py
+```
+https://<あなたのユーザー名>.github.io/mahjong-autocalc/
 ```
 
-`http://127.0.0.1:8000` をブラウザで開きます。
-スマホから使いたい場合は `python app.py --host 0.0.0.0` で起動して、同じ Wi-Fi
-から `http://<PC の IP>:8000` を開いてください。
+> リポジトリの Settings → Pages で Source を **GitHub Actions** にすると、
+> `main` への push で自動的に公開されます (`.github/workflows/pages.yml`)。
 
-### 2. 最初に一度だけ「牌を覚えさせる」
+ホーム画面に追加しておくとアプリのように起動できます (PWA)。
 
-牌のデザインはセットごとに違うため、**そのままだと数牌の数を読み違えます。**
+### 手元で試す
+
+```bash
+npm run serve     # http://127.0.0.1:8080
+```
+
+### 1. 最初に一度だけ「牌を覚えさせる」
+
+牌のデザインはセットごとに違うため、**そのままだと筒子・索子の数を読み違えます。**
 最初に自分の牌を登録すると、以降はほぼ確実に読めるようになります。
 
-一番かんたんなのは、次の 4 枚の写真を撮って登録する方法です。
+次の 4 枚を撮ってください。牌を**表向きに一列**に並べて真上から。
 
 | 撮るもの | 並べる牌 |
 | --- | --- |
@@ -37,36 +46,41 @@ python app.py
 | 索子 | 一索 〜 九索 |
 | 字牌 | 東 南 西 北 白 發 中 |
 
-ブラウザから写真を読み込み、認識結果を正しく直してから
-**「この結果を覚えさせる」** を押すだけです。コマンドからでも登録できます。
+写真を読み込む → 間違っている牌をタップして直す →
+**「この結果を覚えさせる」** を押す。これだけです。
 
-```bash
-python -m mahjong_autocalc.cli calibrate manzu.jpg 123456789m
-python -m mahjong_autocalc.cli calibrate pinzu.jpg 123456789p
-python -m mahjong_autocalc.cli calibrate souzu.jpg 123456789s
-python -m mahjong_autocalc.cli calibrate honor.jpg 1234567z
-```
-
-登録データは `~/.mahjong-autocalc/tile_library.npz` に保存されます
-(`MAHJONG_AUTOCALC_HOME` で変更可)。
+登録データは端末のブラウザ内 (IndexedDB) にのみ保存されます。
 普段使っていて間違いを直したときも「覚えさせる」を押せば、そのぶん賢くなります。
 
-### 3. 和了ったら撮る
+### 2. 和了ったら撮る
 
 1. 和了形の 14 枚を **表向きに一列** に並べて、真上から撮る
    - 鳴きがある場合は、その 3〜4 枚を少し離して置くと別のかたまりとして認識します
-2. 写真を読み込む → 認識結果を確認 (間違っていればタップして修正)
+2. 認識結果を確認 (間違っていればタップして修正)
 3. 和了牌をタップして指定する
 4. 場風・自風・ツモ/ロン・立直・ドラを画面で選ぶ
 5. 「点数を計算する」
 
-### コマンドラインから
+---
+
+## Python 版 (PC)
 
 ```bash
+pip install -r requirements.txt
+python app.py          # http://127.0.0.1:8000
+```
+
+コマンドラインからも使えます。
+
+```bash
+python -m mahjong_autocalc.cli calibrate manzu.jpg 123456789m
 python -m mahjong_autocalc.cli recognize hand.jpg
 python -m mahjong_autocalc.cli score hand.jpg --win 7m --tsumo --riichi --seat 南
 python -m mahjong_autocalc.cli library
 ```
+
+登録データは `~/.mahjong-autocalc/tile_library.npz` に保存されます
+(`MAHJONG_AUTOCALC_HOME` で変更可)。ブラウザ版とは別管理です。
 
 ---
 
@@ -84,7 +98,7 @@ python -m mahjong_autocalc.cli library
 
 ## 精度について
 
-合成した検証画像 (102 枚) での実測値です。
+合成した検証画像 (102 枚) での実測値です。ブラウザ版・Python 版とも同じ結果になります。
 
 | 条件 | 牌の正解率 |
 | --- | --- |
@@ -118,44 +132,49 @@ python -m mahjong_autocalc.cli library
 本場・供託、赤ドラ・裏ドラに対応しています。
 同じ手牌に複数の解釈がある場合は、**一番高くなる形**を自動で選びます (高点法)。
 
-切り替えられるローカルルール:
-
-- 喰い断あり / なし
-- 切り上げ満貫あり / なし
-- 連風牌の雀頭 2符 / 4符
-- ダブル役満あり / なし
-- 役満の複合あり / なし
+切り替えられるローカルルール: 喰い断 / 切り上げ満貫 / 連風牌の雀頭 2符・4符 /
+ダブル役満 / 役満の複合
 
 ---
 
 ## 構成
 
+同じロジックが Python と JavaScript の 2 つあります。ブラウザ版は Python を
+動かせないため移植したもので、**両方に同じテストを用意して食い違いを防いでいます**
+(CI で両方走らせ、画像認識は同一の画素データで突き合わせます)。
+
 ```
-mahjong_autocalc/
-  tiles.py       牌の表現と MPSZ 記法のパース
-  parser.py      手牌を面子構成に分解する (複数解釈を列挙)
-  yaku.py        役の判定
-  fu.py          符計算
-  score.py       基本点と支払いの計算
-  calculator.py  上をまとめて一番高い解釈を選ぶ
-  cli.py         コマンドライン
-  server.py      ローカル Web API (FastAPI)
+mahjong_autocalc/      Python 版
+  tiles.py             牌の表現と MPSZ 記法のパース
+  parser.py            手牌を面子構成に分解する (複数解釈を列挙)
+  yaku.py / fu.py / score.py / calculator.py    役・符・点数
+  cli.py / server.py   コマンドライン / ローカル Web API
+  vision/              検出・特徴量・規則ベース分類・参照ライブラリ
+
+webapp/                ブラウザ版 (これ単体で動く)
+  engine/              点数計算エンジン (tiles / parser / yaku / scoring)
   vision/
-    detect.py    写真から牌の面を切り出す
-    features.py  切り出した面から特徴量を作る
-    glyphs.py    同梱の漢字テンプレートとの照合
-    heuristic.py 規則ベースの分類 (登録前のフォールバック)
-    library.py   自分の牌を覚える参照ライブラリ
-    pipeline.py  画像 → 牌の並び
-web/             ブラウザ UI
-tools/           テンプレート生成・検証画像レンダリング・精度計測
-tests/           テスト
+    cv.js              画像処理の基本操作 (opencv.js を使わない自前実装)
+    detect.js          写真から牌の面を切り出す
+    features.js        切り出した面から特徴量を作る
+    glyphs.js          同梱の漢字テンプレートとの照合
+    heuristic.js       規則ベースの分類 (登録前のフォールバック)
+    library.js         自分の牌を覚える参照ライブラリ (IndexedDB)
+    pipeline.js        画像 → 牌の並び
+  worker.js            認識を別スレッドで走らせる
+  sw.js                オフライン用キャッシュ
+  tests/               Node のテスト
+
+web/                   Python 版のブラウザ UI
+tools/                 テンプレート生成・検証画像レンダリング・精度計測
+tests/                 Python 版のテスト
 ```
 
 ### 認識のしくみ
 
 1. **切り出し** — 牌の面は「明るくて彩度が低い」ので、その領域をマスクで取り出します。
    隣り合った牌は 1 つの塊に繋がるため、牌の継ぎ目 (ほぼ全高が暗い列) を検出して分割します。
+   検出は縮小した画像で行い、切り出しだけ高解像度側から行うことで速くしています。
 2. **特徴量** — 牌ごとに下地の色を中央値で推定し、そこから離れた画素を「刻印」として
    分離します。しきい値を牌ごとに決めているので、照明の色かぶりに強くなっています。
 3. **判別** — 登録済みライブラリとの最近傍照合を優先し、該当がなければ規則ベースに
@@ -168,13 +187,18 @@ tests/           テスト
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                    # テスト (67 件)
-python tools/eval_vision.py --library   # 認識精度の計測
-python tools/render_sample.py "234567m234567p33s" samples/hand.jpg   # 検証用画像の生成
+python -m pytest                                  # Python 版 (67 件)
+
+node --test webapp/tests/engine.test.mjs          # JS 版 点数計算 (35 件)
+python tools/export_raw_samples.py /tmp/mj-raw    # JS 版 画像認識の入力を用意
+MJ_RAW_DIR=/tmp/mj-raw node --test webapp/tests/vision.test.mjs
+
+python tools/eval_vision.py --library             # 認識精度の計測
+python tools/render_sample.py "234567m234567p33s" samples/hand.jpg
 ```
 
-漢字テンプレート (`mahjong_autocalc/vision/glyphs.npz`) はリポジトリに同梱しています。
-作り直す場合は日本語フォントが入った環境で次を実行してください。
+漢字テンプレートはリポジトリに同梱しています (`mahjong_autocalc/vision/glyphs.npz` と
+`webapp/vision/glyph-data.js`)。作り直す場合は日本語フォントのある環境で:
 
 ```bash
 python tools/build_glyph_templates.py
@@ -184,7 +208,8 @@ python tools/build_glyph_templates.py
 
 ## プライバシー
 
-写真はローカルのサーバーが処理するだけで、外部には送信しません。
-サーバー側では「覚えさせる」用に直近数枚をメモリに保持しますが、
-プロセスを終了すれば消えます。ディスクに残るのは、登録した牌の特徴ベクトル
-(`tile_library.npz`) だけで、写真そのものは保存されません。
+ブラウザ版は写真の読み込みから計算まですべてページ内で完結し、通信は一切しません
+(初回の読み込みを除く)。端末に残るのは、登録した牌の特徴ベクトルだけです。
+写真そのものは保存しません。
+
+Python 版もローカルのサーバーが処理するだけで、外部には送信しません。

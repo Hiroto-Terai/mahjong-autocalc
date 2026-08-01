@@ -17,8 +17,14 @@ TILE_H = 88
 TILE_ASPECT = TILE_W / TILE_H  # 牌の面の 幅/高さ。おおよそ 0.72
 
 MAX_DIMENSION = 1400
+# 面の検出はモルフォロジーが重いので、さらに縮めた画像で行う。切り出し自体は
+# MAX_DIMENSION 側から行うので、牌の解像度は落ちない。
+DETECT_DIMENSION = 720
+MIN_TILE_SIDE_RATIO = 0.017
 MIN_AREA_RATIO = 0.0008
-MAX_AREA_RATIO = 0.35
+# 牌の列が画面いっぱいに写ることは普通にあるので、面積の上限は緩くとる。
+# 「背景そのもの」を拾わないためには、四辺すべてに接しているかどうかで弾く。
+MAX_AREA_RATIO = 0.75
 
 
 @dataclass(frozen=True)
@@ -35,9 +41,9 @@ class DetectionError(RuntimeError):
     """牌を検出できなかった場合。"""
 
 
-def _resize(image: np.ndarray) -> tuple[np.ndarray, float]:
+def _resize(image: np.ndarray, limit: int = MAX_DIMENSION) -> tuple[np.ndarray, float]:
     h, w = image.shape[:2]
-    scale = MAX_DIMENSION / max(h, w)
+    scale = limit / max(h, w)
     if scale >= 1.0:
         return image, 1.0
     resized = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
@@ -148,9 +154,15 @@ def detect_tiles(image: np.ndarray) -> list[DetectedTile]:
 
     work, scale = _resize(image)
     inv_scale = 1.0 / scale
-    mask = face_mask(work)
 
-    total_area = work.shape[0] * work.shape[1]
+    # 検出用の縮小画像。求めた四隅は work 座標に戻して使う。
+    small, detect_scale = _resize(work, DETECT_DIMENSION)
+    to_work = 1.0 / detect_scale
+
+    mask = face_mask(small)
+    total_area = small.shape[0] * small.shape[1]
+    small_h, small_w = small.shape[:2]
+    min_side = max(6.0, min(small_w, small_h) * MIN_TILE_SIDE_RATIO)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     blobs: list[tuple[np.ndarray, float]] = []
@@ -158,16 +170,19 @@ def detect_tiles(image: np.ndarray) -> list[DetectedTile]:
         area = cv2.contourArea(contour)
         if not (MIN_AREA_RATIO * total_area <= area <= MAX_AREA_RATIO * total_area):
             continue
+        bx, by, bw, bh = cv2.boundingRect(contour)
+        if bx == 0 and by == 0 and bx + bw >= small_w and by + bh >= small_h:
+            continue  # 四辺すべてに接する塊は背景
         rect = cv2.minAreaRect(contour)
         (_, _), (rw, rh), _ = rect
-        if min(rw, rh) < 12:
+        if min(rw, rh) < min_side:
             continue
         if area / max(rw * rh, 1e-6) < 0.72:
             continue  # 長方形からかけ離れた形は牌ではない
         long_side, short_side = max(rw, rh), min(rw, rh)
         if long_side / short_side > 24:
             continue
-        blobs.append((_quad_from_rect(rect), area))
+        blobs.append((_quad_from_rect(rect) * to_work, area))
 
     if not blobs:
         raise DetectionError(

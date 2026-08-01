@@ -1,0 +1,12 @@
+{
+  "name": "mahjong-autocalc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "牌の写真から麻雀の点数を計算する。ブラウザだけで完結する版。",
+  "scripts": {
+    "test": "node --test webapp/tests/engine.test.mjs && node --test webapp/tests/vision.test.mjs",
+    "test:engine": "node --test webapp/tests/engine.test.mjs",
+    "serve": "python3 -m http.server 8080 --directory webapp"
+  }
+}

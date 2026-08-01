@@ -13,3 +13,6 @@ samples/*.jpg
 samples/*.png
 tile_library.npz
 *.tmp.npz
+
+# Node
+node_modules/

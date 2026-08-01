@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>麻雀 点数自動計算</title>
+<meta name="description" content="牌の写真から麻雀の点数を計算します。写真は端末の外に出ません。">
+<meta name="theme-color" content="#10151b">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🀄</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>麻雀 点数自動計算</h1>
+  <button id="library-button" class="ghost" type="button">牌の登録</button>
+</header>
+
+<main>
+
+  <div class="banner" id="calibration-banner" hidden>
+    <strong>最初に牌を覚えさせてください</strong>
+    <p>
+      牌のデザインはセットごとに違うので、そのままだと筒子・索子の数を読み違えます。
+      <b>萬子 / 筒子 / 索子 / 字牌</b> を一列に並べた写真を 4 枚撮って、
+      認識結果を直してから「この結果を覚えさせる」を押すだけです。以降はほぼ確実に読めます。
+    </p>
+  </div>
+
+  <section class="card" id="upload-card">
+    <h2>1. 手牌の写真</h2>
+    <p class="hint">
+      和了形の 14 枚を <strong>表向きに一列</strong> に並べて、真上から撮ってください。
+      鳴きがある場合は少し離して置くと、別のかたまりとして認識します。
+    </p>
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="file-input" accept="image/*" capture="environment" hidden>
+      <span class="dropzone-icon">🀄</span>
+      <span class="dropzone-text">写真を撮る / 選ぶ</span>
+    </label>
+    <div id="preview-wrap" hidden>
+      <img id="preview" alt="読み込んだ写真">
+    </div>
+    <p id="upload-status" class="status" role="status"></p>
+  </section>
+
+  <section class="card" id="tiles-card" hidden>
+    <h2>2. 認識結果</h2>
+    <p class="hint">
+      牌をタップすると直せます。<b class="win-legend">和了牌</b>は必ず 1 枚指定してください。
+      <span class="uncertain-legend">黄色</span>の牌は自信がないので確認をおすすめします。
+    </p>
+    <div id="groups"></div>
+    <div class="row-actions">
+      <button id="learn-button" class="ghost" type="button">この結果を覚えさせる</button>
+      <span id="learn-status" class="status"></span>
+    </div>
+  </section>
+
+  <section class="card" id="context-card" hidden>
+    <h2>3. 状況</h2>
+
+    <div class="field">
+      <span class="label">場風</span>
+      <div class="segmented" id="round-wind"></div>
+    </div>
+    <div class="field">
+      <span class="label">自風</span>
+      <div class="segmented" id="seat-wind"></div>
+    </div>
+    <div class="field">
+      <span class="label">和了</span>
+      <div class="segmented" id="win-type">
+        <button type="button" data-value="ron" class="active">ロン</button>
+        <button type="button" data-value="tsumo">ツモ</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="label">状況役</span>
+      <div class="checks" id="flags"></div>
+    </div>
+
+    <div class="field">
+      <span class="label">ドラ表示牌</span>
+      <div class="dora-slots">
+        <div id="dora-list" class="chips"></div>
+        <button type="button" class="ghost small" data-add-dora="dora">＋ 追加</button>
+      </div>
+    </div>
+    <div class="field" id="ura-field" hidden>
+      <span class="label">裏ドラ表示牌</span>
+      <div class="dora-slots">
+        <div id="ura-list" class="chips"></div>
+        <button type="button" class="ghost small" data-add-dora="ura">＋ 追加</button>
+      </div>
+    </div>
+
+    <div class="field inline">
+      <label class="label" for="honba">本場</label>
+      <input id="honba" type="number" min="0" max="99" value="0" inputmode="numeric">
+      <label class="label" for="sticks">供託</label>
+      <input id="sticks" type="number" min="0" max="99" value="0" inputmode="numeric">
+    </div>
+
+    <details class="rules">
+      <summary>ルール設定</summary>
+      <label><input type="checkbox" id="rule-kuitan" checked> 喰い断あり</label>
+      <label><input type="checkbox" id="rule-kiriage"> 切り上げ満貫</label>
+      <label><input type="checkbox" id="rule-double-yakuman" checked> ダブル役満あり</label>
+      <label><input type="checkbox" id="rule-multi-yakuman" checked> 役満の複合あり</label>
+      <label>
+        連風牌の雀頭
+        <select id="rule-double-wind">
+          <option value="2" selected>2符</option>
+          <option value="4">4符</option>
+        </select>
+      </label>
+    </details>
+
+    <button id="calculate" class="primary" type="button">点数を計算する</button>
+    <p id="calc-status" class="status" role="status"></p>
+  </section>
+
+  <section class="card result" id="result-card" hidden>
+    <h2>結果</h2>
+    <div id="result"></div>
+  </section>
+
+  <p class="footnote">
+    写真も計算もこの端末の中だけで完結します。どこにも送信しません。
+    一度開けば機内モードでも動きます。
+  </p>
+
+</main>
+
+<div class="modal" id="picker" hidden>
+  <div class="modal-body">
+    <div class="modal-head">
+      <strong id="picker-title">牌を選ぶ</strong>
+      <button type="button" class="ghost small" id="picker-close">閉じる</button>
+    </div>
+    <div id="picker-grid" class="picker-grid"></div>
+    <div id="picker-extra" class="picker-extra"></div>
+  </div>
+</div>
+
+<div class="modal" id="library-modal" hidden>
+  <div class="modal-body">
+    <div class="modal-head">
+      <strong>牌の登録状況</strong>
+      <button type="button" class="ghost small" id="library-close">閉じる</button>
+    </div>
+    <div id="library-body"></div>
+    <button type="button" class="danger small" id="library-reset">登録をすべて消す</button>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
