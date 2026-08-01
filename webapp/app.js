@@ -40,9 +40,12 @@ const MAX_IMAGE_SIDE = 2000;
 const state = {
   tiles: [],          // { index, tile, face, descriptor, uncertain, group, isWin, isRed }
   quads: [],          // 検出した牌の四隅 (重ね表示用)
-  decodedSize: null,  // 実際に認識にかけた画像の大きさ
-  imageFile: null,    // 読み直し用に保持しておく
-  regions: [],        // 手で囲んだ範囲 { rect, count }
+  source: null,       // EXIF 補正・縮小済みの元画像 (canvas)
+  rotation: 0,        // 表示・認識に適用する回転 (0/90/180/270)
+  zoom: 1,
+  decodedSize: null,  // 回転後の、実際に認識にかける大きさ
+  regions: [],        // 指定した範囲 [{ quad: [[x,y]x4], count }]
+  activeRegion: 0,
   manualMode: false,
   groupTypes: {},
   roundWind: EAST,
@@ -92,11 +95,17 @@ async function init() {
     drawOverlay();
   });
   $("manual-apply").addEventListener("click", applyManualRegions);
+  $("manual-add").addEventListener("click", () => addRegion());
+  $("rotate-left").addEventListener("click", () => rotateStage(-90));
+  $("rotate-right").addEventListener("click", () => rotateStage(90));
+  $("zoom-in").addEventListener("click", () => setZoom(nextZoom(1)));
+  $("zoom-out").addEventListener("click", () => setZoom(nextZoom(-1)));
+  $("zoom-fit").addEventListener("click", () => setZoom(1));
+  $("preview-scroll").addEventListener("scroll", drawOverlay, { passive: true });
   buildBulkPresets();
   $("bulk-apply").addEventListener("click", () => applyBulk($("bulk-notation").value.trim()));
-  bindManualSelection();
-  $("preview").addEventListener("load", drawOverlay);
-  window.addEventListener("resize", drawOverlay);
+  bindStageInteraction();
+  window.addEventListener("resize", applyZoom);
 
   $("library-button").addEventListener("click", openLibrary);
   $("library-close").addEventListener("click", () => { $("library-modal").hidden = true; });
@@ -287,39 +296,34 @@ async function loadDrawable(file) {
   return loadViaImageElement(file);
 }
 
-/** 写真を読み込んで RGB の生データにする。大きすぎる画像はここで縮める。 */
-async function decodeImage(file) {
+/** 写真を canvas に読み込む。EXIF の回転を反映し、大きすぎる画像は縮める。 */
+async function decodeToCanvas(file) {
   const bitmap = await loadDrawable(file);
   const sourceWidth = bitmap.width || bitmap.naturalWidth;
   const sourceHeight = bitmap.height || bitmap.naturalHeight;
   if (!sourceWidth || !sourceHeight) throw new Error("画像のサイズを取得できませんでした");
 
   const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(sourceWidth, sourceHeight));
-  const width = Math.round(sourceWidth * scale);
-  const height = Math.round(sourceHeight * scale);
-
-  // OffscreenCanvas も古い Safari には無いので、通常の canvas に落とす。
-  let canvas;
-  if (typeof OffscreenCanvas === "function") {
-    canvas = new OffscreenCanvas(width, height);
-  } else {
-    canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-  }
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  context.drawImage(bitmap, 0, 0, width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(sourceWidth * scale);
+  canvas.height = Math.round(sourceHeight * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   if (bitmap.close) bitmap.close();
+  return canvas;
+}
 
-
-  const rgba = context.getImageData(0, 0, width, height).data;
-  const data = new Uint8ClampedArray(width * height * 3);
+/** いま画面に出ている (回転済みの) 画像を、認識にかける形で取り出す。 */
+function currentImage() {
+  const canvas = $("preview");
+  const rgba = canvas.getContext("2d", { willReadFrequently: true })
+    .getImageData(0, 0, canvas.width, canvas.height).data;
+  const data = new Uint8ClampedArray(canvas.width * canvas.height * 3);
   for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
     data[j] = rgba[i];
     data[j + 1] = rgba[i + 1];
     data[j + 2] = rgba[i + 2];
   }
-  return { width, height, channels: 3, data };
+  return { width: canvas.width, height: canvas.height, channels: 3, data };
 }
 
 function runRecognition(image, regions = null) {
@@ -339,22 +343,22 @@ function runRecognition(image, regions = null) {
 
 async function handleImage(file) {
   setStatus("upload-status", "読み込み中...", "");
-  state.imageFile = file;
   state.regions = [];
+  state.activeRegion = 0;
+  state.rotation = 0;
+  state.zoom = 1;
   renderManualRegions();
-  $("preview").src = URL.createObjectURL(file);
   $("preview-wrap").hidden = false;
 
   let result;
   try {
-    const image = await decodeImage(file);
-    // 検出位置を写真の上に重ねて描くために、実際に処理した大きさを覚えておく。
-    state.decodedSize = { width: image.width, height: image.height };
+    state.source = await decodeToCanvas(file);
+    renderStage();
     setStatus("upload-status", "認識中...", "");
-    result = await runRecognition(image);
+    result = await runRecognition(currentImage());
   } catch (error) {
-    // 自動検出が失敗しても、手で囲めば読めるので導線を出しておく。
-    setStatus("upload-status", `${error.message}「手で囲む」から範囲を指定してください。`, "error");
+    // 自動検出が失敗しても、範囲を指定すれば読めるので導線を出しておく。
+    setStatus("upload-status", `${error.message} 「範囲を指定して読む」から囲んでください。`, "error");
     setManualMode(true);
     return;
   }
@@ -400,13 +404,103 @@ function applyResult(result, { manual }) {
 }
 
 // ---------------------------------------------------------------------------
-// 手で範囲を囲む
+// 画像ステージ (回転・ズーム)
 // ---------------------------------------------------------------------------
 
-/** 表示座標 → 認識にかけた画像の座標。 */
+const ZOOM_STEPS = [1, 1.5, 2, 3, 4, 6];
+
+function nextZoom(direction) {
+  const index = ZOOM_STEPS.findIndex((z) => z >= state.zoom - 1e-6);
+  const target = Math.min(ZOOM_STEPS.length - 1, Math.max(0, index + direction));
+  return ZOOM_STEPS[target];
+}
+
+/** 回転を反映して #preview に描き、大きさとズームを整える。 */
+function renderStage() {
+  const source = state.source;
+  if (!source) return;
+
+  const turned = state.rotation % 180 !== 0;
+  const width = turned ? source.height : source.width;
+  const height = turned ? source.width : source.height;
+
+  const preview = $("preview");
+  preview.width = width;
+  preview.height = height;
+  const context = preview.getContext("2d");
+  context.save();
+  context.translate(width / 2, height / 2);
+  context.rotate((state.rotation * Math.PI) / 180);
+  context.drawImage(source, -source.width / 2, -source.height / 2);
+  context.restore();
+
+  state.decodedSize = { width, height };
+  applyZoom();
+}
+
+function applyZoom() {
+  const scroll = $("preview-scroll");
+  const stage = $("preview-stage");
+  const preview = $("preview");
+  if (!state.decodedSize) return;
+
+  // ズーム 1 倍 = 横幅いっぱいに収まる大きさ。
+  const fitWidth = scroll.clientWidth || scroll.getBoundingClientRect().width;
+  const displayWidth = Math.max(1, fitWidth * state.zoom);
+  const displayHeight = displayWidth * (state.decodedSize.height / state.decodedSize.width);
+
+  stage.style.width = `${displayWidth}px`;
+  stage.style.height = `${displayHeight}px`;
+  preview.style.width = `${displayWidth}px`;
+  preview.style.height = `${displayHeight}px`;
+
+  $("zoom-value").textContent = `${Math.round(state.zoom * 100)}%`;
+  drawOverlay();
+}
+
+function setZoom(next, anchor) {
+  const scroll = $("preview-scroll");
+  const before = state.zoom;
+  state.zoom = Math.min(6, Math.max(1, next));
+  if (state.zoom === before) return;
+
+  // 拡大しても、いま見ている位置が画面の外に飛ばないようにする。
+  const centerX = (scroll.scrollLeft + (anchor?.x ?? scroll.clientWidth / 2)) / before;
+  const centerY = (scroll.scrollTop + (anchor?.y ?? scroll.clientHeight / 2)) / before;
+  applyZoom();
+  scroll.scrollLeft = centerX * state.zoom - (anchor?.x ?? scroll.clientWidth / 2);
+  scroll.scrollTop = centerY * state.zoom - (anchor?.y ?? scroll.clientHeight / 2);
+}
+
+/** 画像を回して、指定済みの範囲も一緒に回す。 */
+function rotateStage(delta) {
+  if (!state.source) return;
+  const before = state.decodedSize;
+  state.rotation = (((state.rotation + delta) % 360) + 360) % 360;
+
+  const turn = ((delta % 360) + 360) % 360;
+  state.regions.forEach((region) => {
+    region.quad = region.quad.map(([x, y]) => {
+      if (turn === 90) return [before.height - y, x];
+      if (turn === 180) return [before.width - x, before.height - y];
+      if (turn === 270) return [y, before.width - x];
+      return [x, y];
+    });
+  });
+  // 認識済みの結果は回転前の座標なので、重ね表示を消しておく。
+  state.quads = [];
+  renderStage();
+}
+
+// ---------------------------------------------------------------------------
+// 範囲の指定 (自由な四角形)
+// ---------------------------------------------------------------------------
+
+const HANDLE_HIT_PX = 26;
+
+/** 表示座標 → 認識にかける画像の座標。 */
 function toImageCoords(clientX, clientY) {
-  const image = $("preview");
-  const rect = image.getBoundingClientRect();
+  const rect = $("preview").getBoundingClientRect();
   const scale = state.decodedSize.width / rect.width;
   return [
     Math.max(0, Math.min(state.decodedSize.width, (clientX - rect.left) * scale)),
@@ -414,61 +508,155 @@ function toImageCoords(clientX, clientY) {
   ];
 }
 
-function bindManualSelection() {
-  const stage = document.querySelector(".preview-stage");
-  let start = null;
-
-  const begin = (e) => {
-    if (!state.manualMode || !state.decodedSize) return;
-    e.preventDefault();
-    start = toImageCoords(e.clientX, e.clientY);
-    state.dragRect = null;
-    stage.setPointerCapture(e.pointerId);
-  };
-
-  const move = (e) => {
-    if (!start) return;
-    e.preventDefault();
-    const now = toImageCoords(e.clientX, e.clientY);
-    state.dragRect = [
-      Math.min(start[0], now[0]), Math.min(start[1], now[1]),
-      Math.max(start[0], now[0]), Math.max(start[1], now[1]),
-    ];
-    drawOverlay();
-  };
-
-  const end = (e) => {
-    if (!start) return;
-    start = null;
-    if (stage.hasPointerCapture?.(e.pointerId)) stage.releasePointerCapture(e.pointerId);
-
-    const rect = state.dragRect;
-    state.dragRect = null;
-    // 指が滑っただけの極小の囲みは無視する。
-    const minSide = state.decodedSize.width * 0.03;
-    if (!rect || rect[2] - rect[0] < minSide || rect[3] - rect[1] < minSide) {
-      drawOverlay();
-      return;
-    }
-    state.regions.push({ rect, count: estimateCountForRect(rect) });
-    renderManualRegions();
-    drawOverlay();
-  };
-
-  stage.addEventListener("pointerdown", begin);
-  stage.addEventListener("pointermove", move);
-  stage.addEventListener("pointerup", end);
-  stage.addEventListener("pointercancel", end);
+/** 画像座標 → 表示座標。 */
+function toDisplayCoords([x, y]) {
+  const rect = $("preview").getBoundingClientRect();
+  const scale = rect.width / state.decodedSize.width;
+  return [x * scale, y * scale];
 }
 
-/** 囲んだ範囲の縦横比から枚数の初期値を出す。 */
-function estimateCountForRect([x0, y0, x1, y1]) {
-  const width = x1 - x0;
-  const height = y1 - y0;
-  const long = Math.max(width, height);
-  const short = Math.min(width, height);
+function defaultQuad() {
+  const { width, height } = state.decodedSize;
+  const x0 = width * 0.10;
+  const x1 = width * 0.90;
+  const y0 = height * 0.35;
+  const y1 = height * 0.65;
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+}
+
+function rectToQuad([x0, y0, x1, y1]) {
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+}
+
+/** 四角形の縦横比から枚数の初期値を出す。 */
+function estimateCountForQuad(quad) {
+  const side = (a, b) => Math.hypot(quad[b][0] - quad[a][0], quad[b][1] - quad[a][1]);
+  const long = Math.max((side(0, 1) + side(3, 2)) / 2, (side(0, 3) + side(1, 2)) / 2);
+  const short = Math.min((side(0, 1) + side(3, 2)) / 2, (side(0, 3) + side(1, 2)) / 2);
   if (short <= 0) return 1;
   return Math.max(1, Math.min(18, Math.round((long / short) / (64 / 88))));
+}
+
+function addRegion(quad) {
+  const shape = quad ?? defaultQuad();
+  state.regions.push({ quad: shape, count: estimateCountForQuad(shape) });
+  state.activeRegion = state.regions.length - 1;
+  renderManualRegions();
+  drawOverlay();
+}
+
+function bindStageInteraction() {
+  const stage = $("preview-stage");
+  let mode = null;      // "handle" | "draw"
+  let handleIndex = -1;
+  let drawStart = null;
+
+  const findHandle = (clientX, clientY) => {
+    const region = state.regions[state.activeRegion];
+    if (!region) return -1;
+    const rect = $("preview").getBoundingClientRect();
+    for (let i = 0; i < 4; i += 1) {
+      const [dx, dy] = toDisplayCoords(region.quad[i]);
+      if (Math.hypot(rect.left + dx - clientX, rect.top + dy - clientY) <= HANDLE_HIT_PX) return i;
+    }
+    return -1;
+  };
+
+  stage.addEventListener("pointerdown", (e) => {
+    if (!state.manualMode || !state.decodedSize) return;
+    handleIndex = findHandle(e.clientX, e.clientY);
+    if (handleIndex >= 0) {
+      mode = "handle";
+    } else {
+      mode = "draw";
+      drawStart = toImageCoords(e.clientX, e.clientY);
+      state.dragRect = null;
+    }
+    e.preventDefault();
+    stage.setPointerCapture(e.pointerId);
+    if (mode === "handle") showLoupe(e.clientX, e.clientY);
+  });
+
+  stage.addEventListener("pointermove", (e) => {
+    if (!mode) return;
+    e.preventDefault();
+    if (mode === "handle") {
+      state.regions[state.activeRegion].quad[handleIndex] = toImageCoords(e.clientX, e.clientY);
+      showLoupe(e.clientX, e.clientY);
+    } else {
+      const now = toImageCoords(e.clientX, e.clientY);
+      state.dragRect = [
+        Math.min(drawStart[0], now[0]), Math.min(drawStart[1], now[1]),
+        Math.max(drawStart[0], now[0]), Math.max(drawStart[1], now[1]),
+      ];
+    }
+    drawOverlay();
+  });
+
+  const finish = (e) => {
+    if (!mode) return;
+    if (stage.hasPointerCapture?.(e.pointerId)) stage.releasePointerCapture(e.pointerId);
+    hideLoupe();
+
+    if (mode === "draw") {
+      const rect = state.dragRect;
+      state.dragRect = null;
+      const minSide = state.decodedSize.width * 0.03;
+      if (rect && rect[2] - rect[0] >= minSide && rect[3] - rect[1] >= minSide) {
+        addRegion(rectToQuad(rect));
+      }
+    } else {
+      // 枚数は利用者が合わせた値なので、隅を動かしても勝手に変えない。
+      renderManualRegions();
+    }
+    mode = null;
+    handleIndex = -1;
+    drawStart = null;
+    drawOverlay();
+  };
+  stage.addEventListener("pointerup", finish);
+  stage.addEventListener("pointercancel", finish);
+}
+
+/** 指で隠れる位置を拡大して見せる。4 隅を正確に合わせるために要る。 */
+function showLoupe(clientX, clientY) {
+  const loupe = $("loupe");
+  const preview = $("preview");
+  const rect = preview.getBoundingClientRect();
+  const size = 108;
+  const magnify = 3;
+
+  loupe.hidden = false;
+  loupe.width = size;
+  loupe.height = size;
+
+  const [ix, iy] = toImageCoords(clientX, clientY);
+  const displayScale = rect.width / state.decodedSize.width;
+  const half = size / (2 * magnify * displayScale);
+
+  const context = loupe.getContext("2d");
+  context.fillStyle = "#000";
+  context.fillRect(0, 0, size, size);
+  context.imageSmoothingEnabled = false;
+  context.drawImage(preview, ix - half, iy - half, half * 2, half * 2, 0, 0, size, size);
+
+  context.strokeStyle = "#4c9ae8";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(size / 2, 0); context.lineTo(size / 2, size);
+  context.moveTo(0, size / 2); context.lineTo(size, size / 2);
+  context.stroke();
+
+  // 指の反対側に出す。
+  const stageRect = $("preview-scroll").getBoundingClientRect();
+  loupe.style.top = `${stageRect.top + 8 + window.scrollY}px`;
+  loupe.style.left = clientX < stageRect.left + stageRect.width / 2
+    ? `${stageRect.right - size - 8}px`
+    : `${stageRect.left + 8}px`;
+}
+
+function hideLoupe() {
+  $("loupe").hidden = true;
 }
 
 function renderManualRegions() {
@@ -477,7 +665,12 @@ function renderManualRegions() {
 
   state.regions.forEach((region, i) => {
     const row = document.createElement("div");
-    row.className = "manual-region";
+    row.className = "manual-region" + (i === state.activeRegion ? " active" : "");
+    row.addEventListener("click", () => {
+      state.activeRegion = i;
+      renderManualRegions();
+      drawOverlay();
+    });
 
     const label = document.createElement("span");
     label.textContent = `囲み ${i + 1}`;
@@ -500,8 +693,8 @@ function renderManualRegions() {
       value.textContent = `${region.count} 枚`;
       drawOverlay();
     };
-    minus.addEventListener("click", () => bump(-1));
-    plus.addEventListener("click", () => bump(1));
+    minus.addEventListener("click", (e) => { e.stopPropagation(); bump(-1); });
+    plus.addEventListener("click", (e) => { e.stopPropagation(); bump(1); });
     stepper.append(minus, value, plus);
     row.appendChild(stepper);
 
@@ -509,8 +702,10 @@ function renderManualRegions() {
     remove.type = "button";
     remove.className = "ghost small";
     remove.textContent = "削除";
-    remove.addEventListener("click", () => {
+    remove.addEventListener("click", (e) => {
+      e.stopPropagation();
       state.regions.splice(i, 1);
+      state.activeRegion = Math.max(0, Math.min(state.activeRegion, state.regions.length - 1));
       renderManualRegions();
       drawOverlay();
     });
@@ -522,34 +717,27 @@ function renderManualRegions() {
   $("manual-apply").disabled = state.regions.length === 0;
 }
 
-function setManualMode(on) {
-  state.manualMode = on;
-  $("manual-panel").hidden = !on;
-  $("manual-toggle").textContent = on ? "手で囲むのをやめる" : "うまく取れない → 手で囲む";
-  document.querySelector(".preview-stage").classList.toggle("selecting", on);
-  drawOverlay();
-}
-
+/** 指定した範囲だけを読み直す。 */
 async function applyManualRegions() {
-  if (!state.regions.length || !state.imageFile) return;
+  if (!state.regions.length || !state.source) return;
   setStatus("upload-status", "指定した範囲を読み込み中...", "");
-
-  const regions = state.regions.map(({ rect, count }) => ({
-    quad: [
-      [rect[0], rect[1]], [rect[2], rect[1]],
-      [rect[2], rect[3]], [rect[0], rect[3]],
-    ],
-    count,
-  }));
-
   try {
-    const image = await decodeImage(state.imageFile);
-    state.decodedSize = { width: image.width, height: image.height };
-    const result = await runRecognition(image, regions);
+    const regions = state.regions.map(({ quad, count }) => ({ quad, count }));
+    const result = await runRecognition(currentImage(), regions);
     applyResult(result, { manual: true });
   } catch (error) {
     setStatus("upload-status", error.message, "error");
   }
+}
+
+function setManualMode(on) {
+  state.manualMode = on;
+  $("manual-panel").hidden = !on;
+  $("manual-toggle").textContent = on ? "範囲の指定をやめる" : "範囲を指定して読む";
+  $("preview-stage").classList.toggle("selecting", on);
+  // 何も無いまま入っても分からないので、最初の囲みを置いておく。
+  if (on && !state.regions.length && state.decodedSize) addRegion();
+  drawOverlay();
 }
 
 /**
@@ -587,38 +775,64 @@ function drawOverlay() {
   context.textAlign = "center";
   context.textBaseline = "middle";
 
-  // 手で囲んだ範囲と、その等分線。
-  const drawRect = ([x0, y0, x1, y1], stroke, fill) => {
-    context.strokeStyle = stroke;
-    context.fillStyle = fill;
+  // 指定した範囲と、その等分線。
+  state.regions.forEach((region, index) => {
+    const points = region.quad.map(([x, y]) => [x * scale, y * scale]);
+    const active = index === state.activeRegion;
+
+    context.strokeStyle = active ? "#4c9ae8" : "rgba(76,154,232,.45)";
+    context.fillStyle = active ? "rgba(76,154,232,.12)" : "rgba(76,154,232,.06)";
+    context.lineWidth = Math.max(1.5, width / 320);
+    context.beginPath();
+    points.forEach(([x, y], i) => (i === 0 ? context.moveTo(x, y) : context.lineTo(x, y)));
+    context.closePath();
+    context.fill();
+    context.stroke();
+
+    // 等分線。牌の境目と合っているかを見るためのもの。
+    context.strokeStyle = active ? "rgba(76,154,232,.8)" : "rgba(76,154,232,.35)";
+    context.lineWidth = Math.max(1, width / 500);
+    for (let i = 1; i < region.count; i += 1) {
+      const t = i / region.count;
+      const top = [
+        points[0][0] + (points[1][0] - points[0][0]) * t,
+        points[0][1] + (points[1][1] - points[0][1]) * t,
+      ];
+      const bottom = [
+        points[3][0] + (points[2][0] - points[3][0]) * t,
+        points[3][1] + (points[2][1] - points[3][1]) * t,
+      ];
+      context.beginPath();
+      context.moveTo(top[0], top[1]);
+      context.lineTo(bottom[0], bottom[1]);
+      context.stroke();
+    }
+
+    // 4 隅のつまみ。触れる大きさで描く。
+    if (active && state.manualMode) {
+      const radius = Math.max(7, width / 46);
+      points.forEach(([x, y]) => {
+        context.beginPath();
+        context.arc(x, y, radius, 0, Math.PI * 2);
+        context.fillStyle = "#fff";
+        context.strokeStyle = "#4c9ae8";
+        context.lineWidth = Math.max(2, width / 200);
+        context.fill();
+        context.stroke();
+      });
+    }
+  });
+
+  if (state.dragRect) {
+    const [x0, y0, x1, y1] = state.dragRect;
+    context.strokeStyle = "#4c9ae8";
+    context.fillStyle = "rgba(76,154,232,.20)";
+    context.lineWidth = Math.max(1.5, width / 320);
     context.beginPath();
     context.rect(x0 * scale, y0 * scale, (x1 - x0) * scale, (y1 - y0) * scale);
     context.fill();
     context.stroke();
-  };
-
-  state.regions.forEach((region) => {
-    drawRect(region.rect, "#4c9ae8", "rgba(76,154,232,.12)");
-    const [x0, y0, x1, y1] = region.rect;
-    const horizontal = x1 - x0 >= y1 - y0;
-    context.strokeStyle = "rgba(76,154,232,.75)";
-    for (let i = 1; i < region.count; i += 1) {
-      const t = i / region.count;
-      context.beginPath();
-      if (horizontal) {
-        const x = (x0 + (x1 - x0) * t) * scale;
-        context.moveTo(x, y0 * scale);
-        context.lineTo(x, y1 * scale);
-      } else {
-        const y = (y0 + (y1 - y0) * t) * scale;
-        context.moveTo(x0 * scale, y);
-        context.lineTo(x1 * scale, y);
-      }
-      context.stroke();
-    }
-  });
-
-  if (state.dragRect) drawRect(state.dragRect, "#4c9ae8", "rgba(76,154,232,.20)");
+  }
 
   if (!$("show-overlay").checked) return;
 

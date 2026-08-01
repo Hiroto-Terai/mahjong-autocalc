@@ -52,27 +52,45 @@
       <span class="dropzone-text">ここに画像をドロップしても読み込めます</span>
     </div>
     <div id="preview-wrap" hidden>
-      <div class="preview-stage">
-        <img id="preview" alt="読み込んだ写真">
-        <canvas id="overlay"></canvas>
+      <div class="stage-toolbar">
+        <div class="tool-group">
+          <button type="button" class="tool" id="rotate-left" title="左に90度回す">↺</button>
+          <button type="button" class="tool" id="rotate-right" title="右に90度回す">↻</button>
+        </div>
+        <div class="tool-group">
+          <button type="button" class="tool" id="zoom-out" title="縮小">−</button>
+          <span class="zoom-value" id="zoom-value">100%</span>
+          <button type="button" class="tool" id="zoom-in" title="拡大">＋</button>
+          <button type="button" class="tool" id="zoom-fit" title="全体を表示">⤢</button>
+        </div>
       </div>
+
+      <div class="preview-scroll" id="preview-scroll">
+        <div class="preview-stage" id="preview-stage">
+          <canvas id="preview"></canvas>
+          <canvas id="overlay"></canvas>
+        </div>
+      </div>
+      <canvas id="loupe" class="loupe" hidden></canvas>
+
       <div class="preview-tools">
         <label class="overlay-toggle">
           <input type="checkbox" id="show-overlay" checked>
           切り出した位置を表示する
         </label>
-        <button type="button" class="ghost small" id="manual-toggle">うまく取れない → 手で囲む</button>
+        <button type="button" class="ghost small" id="manual-toggle">範囲を指定して読む</button>
       </div>
 
       <div class="manual-panel" id="manual-panel" hidden>
         <p class="hint">
-          写真の上を<strong>なぞって、牌の列を囲んでください</strong>。
-          囲んだ範囲を指定した枚数で等分して読みます。自動検出がうまくいかない
-          写真でも、これなら確実に切り出せます。
+          <strong>牌の列を四角で囲み、4 隅を牌に合わせてください。</strong>
+          斜めから撮った写真でも、4 隅さえ合っていれば歪みを補正して切り出します。
+          写真の上をなぞると新しい囲みを追加できます。
         </p>
         <div id="manual-regions" class="manual-regions"></div>
         <div class="manual-actions">
-          <button type="button" class="ghost small" id="manual-clear">囲みを消す</button>
+          <button type="button" class="ghost small" id="manual-add">範囲を追加</button>
+          <button type="button" class="ghost small" id="manual-clear">すべて消す</button>
           <button type="button" class="primary small" id="manual-apply" disabled>この範囲で読む</button>
         </div>
       </div>

@@ -377,13 +377,19 @@ button.danger { background: var(--danger); color: #fff; border: none; border-rad
 
 /* ---- 検出位置の重ね表示 ---- */
 
+.preview-scroll {
+  overflow: auto;
+  border-radius: 10px;
+  background: #000;
+  -webkit-overflow-scrolling: touch;
+  max-height: 60vh;
+}
 .preview-stage { position: relative; line-height: 0; }
-.preview-stage img { width: 100%; border-radius: 10px; display: block; }
-.preview-stage canvas {
+.preview-stage #preview { display: block; }
+.preview-stage #overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  border-radius: 10px;
 }
 
 .overlay-toggle {
@@ -413,7 +419,7 @@ button.danger { background: var(--danger); color: #fff; border: none; border-rad
   /* なぞって囲むので、スクロールに取られないようにする */
   touch-action: none;
 }
-.preview-stage.selecting img { outline: 2px solid var(--win); outline-offset: -2px; border-radius: 10px; }
+.preview-stage.selecting #preview { outline: 2px solid var(--win); outline-offset: -2px; }
 
 .manual-panel {
   margin-top: 12px;
@@ -489,3 +495,56 @@ button.danger { background: var(--danger); color: #fff; border: none; border-rad
   cursor: pointer;
 }
 .bulk-reverse input { accent-color: var(--accent); }
+
+/* ---- 画像ステージのツールバー ---- */
+
+.stage-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.tool-group { display: inline-flex; align-items: center; gap: 4px; }
+
+.tool {
+  min-width: 40px;
+  height: 40px;
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  color: var(--text);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 1.05rem;
+  cursor: pointer;
+}
+.tool:active { background: var(--line); }
+.zoom-value {
+  min-width: 52px;
+  text-align: center;
+  font-size: .78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 4 隅を合わせるときの拡大鏡 */
+.loupe {
+  position: absolute;
+  z-index: 30;
+  width: 108px;
+  height: 108px;
+  border-radius: 12px;
+  border: 2px solid var(--win);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  pointer-events: none;
+  background: #000;
+}
+.loupe[hidden] { display: none; }
+
+.manual-region {
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.manual-region.active { border-color: var(--win); background: rgba(76, 154, 232, .10); }
