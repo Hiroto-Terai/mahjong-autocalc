@@ -41,6 +41,9 @@ const state = {
   tiles: [],          // { index, tile, face, descriptor, uncertain, group, isWin, isRed }
   quads: [],          // 検出した牌の四隅 (重ね表示用)
   decodedSize: null,  // 実際に認識にかけた画像の大きさ
+  imageFile: null,    // 読み直し用に保持しておく
+  regions: [],        // 手で囲んだ範囲 { rect, count }
+  manualMode: false,
   groupTypes: {},
   roundWind: EAST,
   seatWind: EAST,
@@ -82,6 +85,14 @@ async function init() {
   });
 
   $("show-overlay").addEventListener("change", drawOverlay);
+  $("manual-toggle").addEventListener("click", () => setManualMode(!state.manualMode));
+  $("manual-clear").addEventListener("click", () => {
+    state.regions = [];
+    renderManualRegions();
+    drawOverlay();
+  });
+  $("manual-apply").addEventListener("click", applyManualRegions);
+  bindManualSelection();
   $("preview").addEventListener("load", drawOverlay);
   window.addEventListener("resize", drawOverlay);
 
@@ -119,8 +130,8 @@ function startWorker() {
 }
 
 /** Worker が使えない環境向けに、同じ処理をメインスレッドで行う。 */
-async function recognizeOnMainThread(image, samples) {
-  const [{ recognize }, { TileLibrary }] = await Promise.all([
+async function recognizeOnMainThread(image, samples, regions = null) {
+  const [{ recognize, recognizeRegions }, { TileLibrary }] = await Promise.all([
     import("./vision/pipeline.js"),
     import("./vision/library.js"),
   ]);
@@ -136,7 +147,9 @@ async function recognizeOnMainThread(image, samples) {
     );
   }
 
-  const result = recognize(image, localLibrary);
+  const result = regions && regions.length
+    ? recognizeRegions(image, regions, localLibrary)
+    : recognize(image, localLibrary);
   return {
     guesses: result.guesses.map((g) => ({
       index: g.index,
@@ -148,6 +161,7 @@ async function recognizeOnMainThread(image, samples) {
       uncertain: g.uncertain,
       alternatives: g.alternatives,
       face: { width: g.face.width, height: g.face.height, data: g.face.data },
+      quad: g.quad,
       descriptor: g.features.descriptor,
     })),
     count: result.count,
@@ -306,23 +320,26 @@ async function decodeImage(file) {
   return { width, height, channels: 3, data };
 }
 
-function runRecognition(image) {
+function runRecognition(image, regions = null) {
   const samples = {};
   for (const [tile, vectors] of library.samples) {
     samples[tile] = vectors.map((v) => Array.from(v));
   }
-  if (!worker) return recognizeOnMainThread(image, samples);
+  if (!worker) return recognizeOnMainThread(image, samples, regions);
 
   return new Promise((resolve, reject) => {
     const id = nextJobId;
     nextJobId += 1;
     pendingJobs.set(id, { resolve, reject });
-    worker.postMessage({ id, image, library: samples }, [image.data.buffer]);
+    worker.postMessage({ id, image, library: samples, regions }, [image.data.buffer]);
   });
 }
 
 async function handleImage(file) {
   setStatus("upload-status", "読み込み中...", "");
+  state.imageFile = file;
+  state.regions = [];
+  renderManualRegions();
   $("preview").src = URL.createObjectURL(file);
   $("preview-wrap").hidden = false;
 
@@ -334,10 +351,16 @@ async function handleImage(file) {
     setStatus("upload-status", "認識中...", "");
     result = await runRecognition(image);
   } catch (error) {
-    setStatus("upload-status", error.message, "error");
+    // 自動検出が失敗しても、手で囲めば読めるので導線を出しておく。
+    setStatus("upload-status", `${error.message}「手で囲む」から範囲を指定してください。`, "error");
+    setManualMode(true);
     return;
   }
+  applyResult(result, { manual: false });
+}
 
+/** 認識結果を画面に反映する。自動検出と手動指定で共通。 */
+function applyResult(result, { manual }) {
   state.groupTypes = {};
   state.quads = result.guesses.map((g) => g.quad);
   state.tiles = result.guesses.map((g) => ({
@@ -357,9 +380,10 @@ async function handleImage(file) {
   const note = result.librarySize === 0
     ? " 牌をまだ覚えていないので、直したうえで「覚えさせる」を押すと次から精度が上がります。"
     : "";
+  const head = manual ? "指定した範囲から" : "";
   setStatus(
     "upload-status",
-    `${result.count} 枚を検出しました。` +
+    `${head}${result.count} 枚を読み込みました。` +
     `${result.uncertainCount ? `${result.uncertainCount} 枚は自信なしです。` : ""}${note}`,
     result.uncertainCount ? "" : "ok"
   );
@@ -368,6 +392,159 @@ async function handleImage(file) {
   drawOverlay();
   $("tiles-card").hidden = false;
   $("context-card").hidden = false;
+}
+
+// ---------------------------------------------------------------------------
+// 手で範囲を囲む
+// ---------------------------------------------------------------------------
+
+/** 表示座標 → 認識にかけた画像の座標。 */
+function toImageCoords(clientX, clientY) {
+  const image = $("preview");
+  const rect = image.getBoundingClientRect();
+  const scale = state.decodedSize.width / rect.width;
+  return [
+    Math.max(0, Math.min(state.decodedSize.width, (clientX - rect.left) * scale)),
+    Math.max(0, Math.min(state.decodedSize.height, (clientY - rect.top) * scale)),
+  ];
+}
+
+function bindManualSelection() {
+  const stage = document.querySelector(".preview-stage");
+  let start = null;
+
+  const begin = (e) => {
+    if (!state.manualMode || !state.decodedSize) return;
+    e.preventDefault();
+    start = toImageCoords(e.clientX, e.clientY);
+    state.dragRect = null;
+    stage.setPointerCapture(e.pointerId);
+  };
+
+  const move = (e) => {
+    if (!start) return;
+    e.preventDefault();
+    const now = toImageCoords(e.clientX, e.clientY);
+    state.dragRect = [
+      Math.min(start[0], now[0]), Math.min(start[1], now[1]),
+      Math.max(start[0], now[0]), Math.max(start[1], now[1]),
+    ];
+    drawOverlay();
+  };
+
+  const end = (e) => {
+    if (!start) return;
+    start = null;
+    if (stage.hasPointerCapture?.(e.pointerId)) stage.releasePointerCapture(e.pointerId);
+
+    const rect = state.dragRect;
+    state.dragRect = null;
+    // 指が滑っただけの極小の囲みは無視する。
+    const minSide = state.decodedSize.width * 0.03;
+    if (!rect || rect[2] - rect[0] < minSide || rect[3] - rect[1] < minSide) {
+      drawOverlay();
+      return;
+    }
+    state.regions.push({ rect, count: estimateCountForRect(rect) });
+    renderManualRegions();
+    drawOverlay();
+  };
+
+  stage.addEventListener("pointerdown", begin);
+  stage.addEventListener("pointermove", move);
+  stage.addEventListener("pointerup", end);
+  stage.addEventListener("pointercancel", end);
+}
+
+/** 囲んだ範囲の縦横比から枚数の初期値を出す。 */
+function estimateCountForRect([x0, y0, x1, y1]) {
+  const width = x1 - x0;
+  const height = y1 - y0;
+  const long = Math.max(width, height);
+  const short = Math.min(width, height);
+  if (short <= 0) return 1;
+  return Math.max(1, Math.min(18, Math.round((long / short) / (64 / 88))));
+}
+
+function renderManualRegions() {
+  const container = $("manual-regions");
+  container.innerHTML = "";
+
+  state.regions.forEach((region, i) => {
+    const row = document.createElement("div");
+    row.className = "manual-region";
+
+    const label = document.createElement("span");
+    label.textContent = `囲み ${i + 1}`;
+    row.appendChild(label);
+
+    const stepper = document.createElement("div");
+    stepper.className = "stepper";
+    const minus = document.createElement("button");
+    minus.type = "button";
+    minus.textContent = "−";
+    const value = document.createElement("span");
+    value.className = "stepper-value";
+    value.textContent = `${region.count} 枚`;
+    const plus = document.createElement("button");
+    plus.type = "button";
+    plus.textContent = "＋";
+
+    const bump = (delta) => {
+      region.count = Math.max(1, Math.min(18, region.count + delta));
+      value.textContent = `${region.count} 枚`;
+      drawOverlay();
+    };
+    minus.addEventListener("click", () => bump(-1));
+    plus.addEventListener("click", () => bump(1));
+    stepper.append(minus, value, plus);
+    row.appendChild(stepper);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ghost small";
+    remove.textContent = "削除";
+    remove.addEventListener("click", () => {
+      state.regions.splice(i, 1);
+      renderManualRegions();
+      drawOverlay();
+    });
+    row.appendChild(remove);
+
+    container.appendChild(row);
+  });
+
+  $("manual-apply").disabled = state.regions.length === 0;
+}
+
+function setManualMode(on) {
+  state.manualMode = on;
+  $("manual-panel").hidden = !on;
+  $("manual-toggle").textContent = on ? "手で囲むのをやめる" : "うまく取れない → 手で囲む";
+  document.querySelector(".preview-stage").classList.toggle("selecting", on);
+  drawOverlay();
+}
+
+async function applyManualRegions() {
+  if (!state.regions.length || !state.imageFile) return;
+  setStatus("upload-status", "指定した範囲を読み込み中...", "");
+
+  const regions = state.regions.map(({ rect, count }) => ({
+    quad: [
+      [rect[0], rect[1]], [rect[2], rect[1]],
+      [rect[2], rect[3]], [rect[0], rect[3]],
+    ],
+    count,
+  }));
+
+  try {
+    const image = await decodeImage(state.imageFile);
+    state.decodedSize = { width: image.width, height: image.height };
+    const result = await runRecognition(image, regions);
+    applyResult(result, { manual: true });
+  } catch (error) {
+    setStatus("upload-status", error.message, "error");
+  }
 }
 
 /**
@@ -379,11 +556,9 @@ async function handleImage(file) {
 function drawOverlay() {
   const canvas = $("overlay");
   const image = $("preview");
-  if (!state.quads.length || !state.decodedSize || !image.clientWidth) {
-    canvas.hidden = true;
-    return;
-  }
-  if (!$("show-overlay").checked) {
+  const wantsOverlay = $("show-overlay").checked || state.manualMode;
+  const hasSomething = state.quads.length || state.regions.length || state.dragRect;
+  if (!state.decodedSize || !image.clientWidth || !hasSomething || !wantsOverlay) {
     canvas.hidden = true;
     return;
   }
@@ -406,6 +581,41 @@ function drawOverlay() {
   context.font = `${Math.max(9, width / 42)}px system-ui, sans-serif`;
   context.textAlign = "center";
   context.textBaseline = "middle";
+
+  // 手で囲んだ範囲と、その等分線。
+  const drawRect = ([x0, y0, x1, y1], stroke, fill) => {
+    context.strokeStyle = stroke;
+    context.fillStyle = fill;
+    context.beginPath();
+    context.rect(x0 * scale, y0 * scale, (x1 - x0) * scale, (y1 - y0) * scale);
+    context.fill();
+    context.stroke();
+  };
+
+  state.regions.forEach((region) => {
+    drawRect(region.rect, "#4c9ae8", "rgba(76,154,232,.12)");
+    const [x0, y0, x1, y1] = region.rect;
+    const horizontal = x1 - x0 >= y1 - y0;
+    context.strokeStyle = "rgba(76,154,232,.75)";
+    for (let i = 1; i < region.count; i += 1) {
+      const t = i / region.count;
+      context.beginPath();
+      if (horizontal) {
+        const x = (x0 + (x1 - x0) * t) * scale;
+        context.moveTo(x, y0 * scale);
+        context.lineTo(x, y1 * scale);
+      } else {
+        const y = (y0 + (y1 - y0) * t) * scale;
+        context.moveTo(x0 * scale, y);
+        context.lineTo(x1 * scale, y);
+      }
+      context.stroke();
+    }
+  });
+
+  if (state.dragRect) drawRect(state.dragRect, "#4c9ae8", "rgba(76,154,232,.20)");
+
+  if (!$("show-overlay").checked) return;
 
   state.quads.forEach((quad, i) => {
     const tile = state.tiles[i];

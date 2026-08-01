@@ -56,10 +56,26 @@
         <img id="preview" alt="読み込んだ写真">
         <canvas id="overlay"></canvas>
       </div>
-      <label class="overlay-toggle">
-        <input type="checkbox" id="show-overlay" checked>
-        切り出した位置を表示する
-      </label>
+      <div class="preview-tools">
+        <label class="overlay-toggle">
+          <input type="checkbox" id="show-overlay" checked>
+          切り出した位置を表示する
+        </label>
+        <button type="button" class="ghost small" id="manual-toggle">うまく取れない → 手で囲む</button>
+      </div>
+
+      <div class="manual-panel" id="manual-panel" hidden>
+        <p class="hint">
+          写真の上を<strong>なぞって、牌の列を囲んでください</strong>。
+          囲んだ範囲を指定した枚数で等分して読みます。自動検出がうまくいかない
+          写真でも、これなら確実に切り出せます。
+        </p>
+        <div id="manual-regions" class="manual-regions"></div>
+        <div class="manual-actions">
+          <button type="button" class="ghost small" id="manual-clear">囲みを消す</button>
+          <button type="button" class="primary small" id="manual-apply" disabled>この範囲で読む</button>
+        </div>
+      </div>
     </div>
     <p id="upload-status" class="status" role="status"></p>
   </section>

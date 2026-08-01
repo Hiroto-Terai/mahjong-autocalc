@@ -10,7 +10,7 @@ export const TILE_W = 64;
 export const TILE_H = 88;
 export const TILE_ASPECT = TILE_W / TILE_H; // 牌の面の 幅/高さ。おおよそ 0.72
 
-const MAX_DIMENSION = 1400;
+export const MAX_DIMENSION = 1400;
 // 面の検出はモルフォロジーが重いので、さらに縮めた画像で行う。切り出し自体は
 // MAX_DIMENSION 側から行うので、牌の解像度は落ちない。
 const DETECT_DIMENSION = 720;
@@ -128,6 +128,43 @@ function normalizeRowQuad(quad) {
 const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 
 /**
+ * 四隅で囲まれた帯を count 枚に等分して切り出す。
+ *
+ * 自動検出の結果にも、利用者が手で指定した範囲にも同じものを使う。
+ * quad は 左上, 右上, 右下, 左下 の順。
+ */
+export function cropRow(image, quad, count, group = 0, startOrder = 0) {
+  const ordered = normalizeRowQuad(quad);
+  const out = [];
+  for (let i = 0; i < count; i += 1) {
+    const t0 = i / count;
+    const t1 = (i + 1) / count;
+    const tileQuad = [
+      lerp(ordered[0], ordered[1], t0),
+      lerp(ordered[0], ordered[1], t1),
+      lerp(ordered[3], ordered[2], t1),
+      lerp(ordered[3], ordered[2], t0),
+    ];
+    out.push({
+      image: warpQuad(image, tileQuad, TILE_W, TILE_H),
+      quad: tileQuad,
+      group,
+      order: startOrder + i,
+    });
+  }
+  return out;
+}
+
+/** 帯の縦横比から、入っていそうな牌の枚数を見積もる。 */
+export function estimateTileCount(quad) {
+  const ordered = normalizeRowQuad(quad);
+  const width = Math.hypot(ordered[1][0] - ordered[0][0], ordered[1][1] - ordered[0][1]);
+  const height = Math.hypot(ordered[3][0] - ordered[0][0], ordered[3][1] - ordered[0][1]);
+  if (height <= 0) return 1;
+  return Math.max(1, Math.min(18, Math.round((width / height) / TILE_ASPECT)));
+}
+
+/**
  * 写真から牌を検出し、正規化した面の画像を並び順に返す。
  * @returns {{image:object, quad:number[][], group:number, order:number}[]}
  */
@@ -214,20 +251,10 @@ export function detectTiles(image) {
     let n = splitCount(stripW, TILE_H, seamPositions(strip));
     n = Math.max(1, Math.min(n, 18));
 
-    for (let i = 0; i < n; i += 1) {
-      const t0 = i / n;
-      const t1 = (i + 1) / n;
-      const tileQuad = [
-        lerp(ordered[0], ordered[1], t0),
-        lerp(ordered[0], ordered[1], t1),
-        lerp(ordered[3], ordered[2], t1),
-        lerp(ordered[3], ordered[2], t0),
-      ];
+    for (const tile of cropRow(work, ordered, n, groupIndex, order)) {
       results.push({
-        image: warpQuad(work, tileQuad, TILE_W, TILE_H),
-        quad: tileQuad.map(([x, y]) => [x * invScale, y * invScale]),
-        group: groupIndex,
-        order,
+        ...tile,
+        quad: tile.quad.map(([x, y]) => [x * invScale, y * invScale]),
       });
       order += 1;
     }

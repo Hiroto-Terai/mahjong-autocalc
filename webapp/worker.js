@@ -1,7 +1,7 @@
 // 認識は重いので Web Worker で走らせ、画面が固まらないようにする。
 
 import { TileLibrary } from "./vision/library.js";
-import { recognize } from "./vision/pipeline.js";
+import { recognize, recognizeRegions } from "./vision/pipeline.js";
 
 /** メインスレッドから渡された素のオブジェクトをライブラリに戻す。 */
 function buildLibrary(samples) {
@@ -17,9 +17,13 @@ function buildLibrary(samples) {
 }
 
 self.onmessage = (event) => {
-  const { id, image, library } = event.data;
+  const { id, image, library, regions } = event.data;
   try {
-    const result = recognize(image, buildLibrary(library));
+    const tileLibrary = buildLibrary(library);
+    // regions が来たら利用者が指定した範囲だけを読む。無ければ自動検出。
+    const result = regions && regions.length
+      ? recognizeRegions(image, regions, tileLibrary)
+      : recognize(image, tileLibrary);
 
     // 刻印マスクなど大きいものは返さず、必要なものだけ詰め直す。
     const guesses = result.guesses.map((g) => ({

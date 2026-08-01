@@ -396,3 +396,57 @@ button.danger { background: var(--danger); color: #fff; border: none; border-rad
   cursor: pointer;
 }
 .overlay-toggle input { accent-color: var(--accent); }
+
+/* ---- 手で範囲を囲む ---- */
+
+.preview-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.preview-stage.selecting {
+  cursor: crosshair;
+  /* なぞって囲むので、スクロールに取られないようにする */
+  touch-action: none;
+}
+.preview-stage.selecting img { outline: 2px solid var(--win); outline-offset: -2px; border-radius: 10px; }
+
+.manual-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-2);
+}
+.manual-panel .hint { margin-bottom: 10px; }
+
+.manual-regions { display: grid; gap: 8px; }
+.manual-region {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: .82rem;
+}
+
+.stepper { display: inline-flex; align-items: center; gap: 2px; }
+.stepper button {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.stepper button:active { background: var(--line); }
+.stepper-value { min-width: 56px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.manual-actions { display: flex; gap: 8px; margin-top: 12px; }
+.manual-actions .primary { width: auto; flex: 1; padding: 10px; font-size: .9rem; }

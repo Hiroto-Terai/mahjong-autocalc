@@ -1,9 +1,10 @@
 // 画像 → 牌の並び、までを通す。Python 版 vision/pipeline.py の移植。
 
 import { tileName, tileToStr } from "../engine/tiles.js";
-import { detectTiles } from "./detect.js";
+import { MAX_DIMENSION, cropRow, detectTiles } from "./detect.js";
 import { extract } from "./features.js";
 import { classify } from "./heuristic.js";
+import { resize } from "./cv.js";
 
 // ライブラリの照合スコアがこの値を超えたら、規則ベースの推定より優先する。
 export const LIBRARY_TRUST_THRESHOLD = 0.86;
@@ -44,15 +45,8 @@ export function classifyOne(features, library) {
   return { tile: null, confidence: 0, source: "unknown", alternatives: [] };
 }
 
-/**
- * 写真から牌を認識する。
- * @param {object} image RGB 画像
- * @param {TileLibrary|null} library
- */
-export function recognize(image, library = null) {
-  const detected = detectTiles(image);
-
-  const guesses = detected.map((tile) => {
+function describe(detected, library) {
+  return detected.map((tile) => {
     const features = extract(tile.image);
     const { tile: id, confidence, source, alternatives } = classifyOne(features, library);
     return {
@@ -70,13 +64,56 @@ export function recognize(image, library = null) {
       features,
     };
   });
+}
 
+function summarize(guesses, library) {
   return {
     guesses,
     count: guesses.length,
     uncertainCount: guesses.filter((g) => g.uncertain).length,
     librarySize: library ? library.size : 0,
   };
+}
+
+/**
+ * 写真から牌を認識する。
+ * @param {object} image RGB 画像
+ * @param {TileLibrary|null} library
+ */
+export function recognize(image, library = null) {
+  return summarize(describe(detectTiles(image), library), library);
+}
+
+/**
+ * 利用者が指定した範囲だけを読む。
+ *
+ * 自動検出は背景や照明の影響を受けるが、こちらは範囲と枚数が与えられるので
+ * そこは外さない。切り出しと判別は自動検出と同じものを通す。
+ *
+ * @param {object} image RGB 画像 (recognize に渡すのと同じもの)
+ * @param {{quad:number[][], count:number}[]} regions 画像座標での範囲と枚数
+ */
+export function recognizeRegions(image, regions, library = null) {
+  // 自動検出と同じ土俵に乗せるため、同じ縮小をかけてから切り出す。
+  let work = image;
+  let scale = 1;
+  const longest = Math.max(image.width, image.height);
+  if (longest > MAX_DIMENSION) {
+    scale = MAX_DIMENSION / longest;
+    work = resize(image, Math.round(image.width * scale), Math.round(image.height * scale));
+  }
+  const invScale = 1 / scale;
+
+  const detected = [];
+  regions.forEach((region, group) => {
+    const quad = region.quad.map(([x, y]) => [x * scale, y * scale]);
+    const count = Math.max(1, Math.min(18, Math.round(region.count)));
+    for (const tile of cropRow(work, quad, count, group, detected.length)) {
+      detected.push({ ...tile, quad: tile.quad.map(([x, y]) => [x * invScale, y * invScale]) });
+    }
+  });
+
+  return summarize(describe(detected, library), library);
 }
 
 /**
