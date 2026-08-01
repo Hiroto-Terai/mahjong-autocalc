@@ -201,12 +201,19 @@ function bindWinType() {
 
 function bindUpload() {
   const zone = $("dropzone");
-  const input = $("file-input");
 
-  input.addEventListener("change", () => {
-    if (input.files && input.files[0]) handleImage(input.files[0]);
-    input.value = "";
-  });
+  // カメラ用とアルバム用で input を分ける。capture 付きの input は
+  // スマホでカメラを直接開いてしまい、アルバムから選べないため。
+  [["pick-camera", "camera-input"], ["pick-album", "album-input"]].forEach(
+    ([buttonId, inputId]) => {
+      const input = $(inputId);
+      $(buttonId).addEventListener("click", () => input.click());
+      input.addEventListener("change", () => {
+        if (input.files && input.files[0]) handleImage(input.files[0]);
+        input.value = "";  // 同じ写真をもう一度選んでも change が起きるように
+      });
+    }
+  );
 
   ["dragenter", "dragover"].forEach((type) =>
     zone.addEventListener(type, (e) => { e.preventDefault(); zone.classList.add("over"); })
@@ -218,14 +225,56 @@ function bindUpload() {
     const file = e.dataTransfer.files && e.dataTransfer.files[0];
     if (file) handleImage(file);
   });
+
+  // 貼り付けでも読めるようにしておく (PC で便利)。
+  document.addEventListener("paste", (e) => {
+    const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+    if (item) handleImage(item.getAsFile());
+  });
+}
+
+/** <img> 経由で読み込む。createImageBitmap が使えない環境や HEIC 向けの逃げ道。 */
+function loadViaImageElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("この画像は読み込めませんでした。JPEG か PNG で試してください"));
+    };
+    image.src = url;
+  });
+}
+
+/** ファイルを描画できるものにする。 */
+async function loadDrawable(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      // アルバムの写真は EXIF に回転情報を持つことがある。反映させないと
+      // 牌が横倒しのまま渡ってしまうので from-image を明示する。
+      return await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      try {
+        return await createImageBitmap(file);
+      } catch {
+        // HEIC など createImageBitmap が扱えない形式は <img> に任せる。
+      }
+    }
+  }
+  return loadViaImageElement(file);
 }
 
 /** 写真を読み込んで RGB の生データにする。大きすぎる画像はここで縮める。 */
 async function decodeImage(file) {
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(bitmap.width, bitmap.height));
-  const width = Math.round(bitmap.width * scale);
-  const height = Math.round(bitmap.height * scale);
+  const bitmap = await loadDrawable(file);
+  const sourceWidth = bitmap.width || bitmap.naturalWidth;
+  const sourceHeight = bitmap.height || bitmap.naturalHeight;
+  if (!sourceWidth || !sourceHeight) throw new Error("画像のサイズを取得できませんでした");
+
+  const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(sourceWidth, sourceHeight));
+  const width = Math.round(sourceWidth * scale);
+  const height = Math.round(sourceHeight * scale);
 
   // OffscreenCanvas も古い Safari には無いので、通常の canvas に落とす。
   let canvas;
@@ -239,6 +288,7 @@ async function decodeImage(file) {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   context.drawImage(bitmap, 0, 0, width, height);
   if (bitmap.close) bitmap.close();
+
 
   const rgba = context.getImageData(0, 0, width, height).data;
   const data = new Uint8ClampedArray(width * height * 3);

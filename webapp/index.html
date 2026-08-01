@@ -35,11 +35,22 @@
       和了形の 14 枚を <strong>表向きに一列</strong> に並べて、真上から撮ってください。
       鳴きがある場合は少し離して置くと、別のかたまりとして認識します。
     </p>
-    <label class="dropzone" id="dropzone">
-      <input type="file" id="file-input" accept="image/*" capture="environment" hidden>
+    <!-- capture 付きの input はカメラを直接開くのでアルバムを選べない。
+         カメラとアルバムで input を分けて、どちらからでも読めるようにする。 -->
+    <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
+    <input type="file" id="album-input" accept="image/*" hidden>
+    <div class="dropzone" id="dropzone">
       <span class="dropzone-icon">🀄</span>
-      <span class="dropzone-text">写真を撮る / 選ぶ</span>
-    </label>
+      <div class="pick-actions">
+        <button type="button" class="pick" id="pick-camera">
+          <span class="pick-icon">📷</span>カメラで撮る
+        </button>
+        <button type="button" class="pick" id="pick-album">
+          <span class="pick-icon">🖼️</span>アルバムから選ぶ
+        </button>
+      </div>
+      <span class="dropzone-text">ここに画像をドロップしても読み込めます</span>
+    </div>
     <div id="preview-wrap" hidden>
       <img id="preview" alt="読み込んだ写真">
     </div>

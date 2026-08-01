@@ -79,16 +79,20 @@ main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 28px 16px;
+  gap: 12px;
+  padding: 24px 16px;
   border: 2px dashed var(--line);
   border-radius: var(--radius);
-  cursor: pointer;
   transition: border-color .15s, background .15s;
 }
-.dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--card-2); }
+.dropzone.over { border-color: var(--accent); background: var(--card-2); }
 .dropzone-icon { font-size: 2rem; }
-.dropzone-text { font-size: .9rem; color: var(--muted); }
+.dropzone-text { font-size: .78rem; color: var(--muted); }
+
+/* ドラッグ&ドロップはポインタのある環境だけの話なので、スマホでは出さない */
+@media (hover: none) and (pointer: coarse) {
+  .dropzone-text { display: none; }
+}
 
 #preview-wrap { margin-top: 12px; }
 #preview { width: 100%; border-radius: 10px; display: block; }
@@ -331,4 +335,42 @@ button.danger { background: var(--danger); color: #fff; border: none; border-rad
   text-align: center;
   margin: 4px 0 0;
   line-height: 1.7;
+}
+
+/* ---- 写真の選び方 (カメラ / アルバム) ---- */
+
+.pick-actions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.pick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-2);
+  color: var(--text);
+  font: inherit;
+  font-size: .86rem;
+  font-weight: 600;
+  cursor: pointer;
+  /* 指で押しやすい大きさを確保する */
+  min-height: 76px;
+  transition: border-color .15s, background .15s;
+}
+.pick:hover { border-color: var(--accent); }
+.pick:active { background: var(--line); }
+.pick-icon { font-size: 1.4rem; line-height: 1; }
+
+@media (max-width: 340px) {
+  .pick-actions { flex-direction: column; }
+  .pick { flex-direction: row; gap: 8px; min-height: 0; }
 }
