@@ -62,14 +62,7 @@ const pendingJobs = new Map();
 async function init() {
   library = await TileLibrary.open(new IndexedDbStorage());
 
-  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-  worker.onmessage = (event) => {
-    const job = pendingJobs.get(event.data.id);
-    if (!job) return;
-    pendingJobs.delete(event.data.id);
-    if (event.data.ok) job.resolve(event.data.result);
-    else job.reject(new Error(event.data.error));
-  };
+  startWorker();
 
   buildWindSelector($("round-wind"), "roundWind");
   buildWindSelector($("seat-wind"), "seatWind");
@@ -95,6 +88,66 @@ async function init() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register(new URL("./sw.js", import.meta.url)).catch(() => {});
   }
+}
+
+/**
+ * 認識用の Worker を起動する。
+ *
+ * モジュール Worker は古い iOS Safari (16.4 未満) が対応していない。使えない
+ * 場合はメインスレッドで動かす。画面が一瞬固まるだけで、結果は変わらない。
+ */
+function startWorker() {
+  try {
+    worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+    worker.onmessage = (event) => {
+      const job = pendingJobs.get(event.data.id);
+      if (!job) return;
+      pendingJobs.delete(event.data.id);
+      if (event.data.ok) job.resolve(event.data.result);
+      else job.reject(new Error(event.data.error));
+    };
+    worker.onerror = () => { worker = null; };
+  } catch {
+    worker = null;
+  }
+}
+
+/** Worker が使えない環境向けに、同じ処理をメインスレッドで行う。 */
+async function recognizeOnMainThread(image, samples) {
+  const [{ recognize }, { TileLibrary }] = await Promise.all([
+    import("./vision/pipeline.js"),
+    import("./vision/library.js"),
+  ]);
+
+  let localLibrary = null;
+  if (Object.keys(samples).length) {
+    localLibrary = new TileLibrary();
+    localLibrary.samples = new Map(
+      Object.entries(samples).map(([tile, vectors]) => [
+        Number(tile),
+        vectors.map((v) => Float32Array.from(v)),
+      ])
+    );
+  }
+
+  const result = recognize(image, localLibrary);
+  return {
+    guesses: result.guesses.map((g) => ({
+      index: g.index,
+      tile: g.tile,
+      name: g.name,
+      confidence: g.confidence,
+      source: g.source,
+      group: g.group,
+      uncertain: g.uncertain,
+      alternatives: g.alternatives,
+      face: { width: g.face.width, height: g.face.height, data: g.face.data },
+      descriptor: g.features.descriptor,
+    })),
+    count: result.count,
+    uncertainCount: result.uncertainCount,
+    librarySize: result.librarySize,
+  };
 }
 
 function updateCalibrationBanner() {
@@ -174,10 +227,18 @@ async function decodeImage(file) {
   const width = Math.round(bitmap.width * scale);
   const height = Math.round(bitmap.height * scale);
 
-  const canvas = new OffscreenCanvas(width, height);
+  // OffscreenCanvas も古い Safari には無いので、通常の canvas に落とす。
+  let canvas;
+  if (typeof OffscreenCanvas === "function") {
+    canvas = new OffscreenCanvas(width, height);
+  } else {
+    canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+  }
   const context = canvas.getContext("2d", { willReadFrequently: true });
   context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
+  if (bitmap.close) bitmap.close();
 
   const rgba = context.getImageData(0, 0, width, height).data;
   const data = new Uint8ClampedArray(width * height * 3);
@@ -194,6 +255,8 @@ function runRecognition(image) {
   for (const [tile, vectors] of library.samples) {
     samples[tile] = vectors.map((v) => Array.from(v));
   }
+  if (!worker) return recognizeOnMainThread(image, samples);
+
   return new Promise((resolve, reject) => {
     const id = nextJobId;
     nextJobId += 1;

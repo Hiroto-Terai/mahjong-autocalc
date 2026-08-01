@@ -21,8 +21,10 @@ GitHub Pages に置いてあるページをスマホで開くだけです。イ�
 https://<あなたのユーザー名>.github.io/mahjong-autocalc/
 ```
 
-> リポジトリの Settings → Pages で Source を **GitHub Actions** にすると、
-> `main` への push で自動的に公開されます (`.github/workflows/pages.yml`)。
+> リポジトリの Settings → Pages で Source を **GitHub Actions** にしておくと、
+> **既定ブランチへの push で自動的に公開されます** (`.github/workflows/pages.yml`)。
+> ブランチ名は決め打ちしていないので、既定が `main` でも別名でも動きます。
+> Actions タブの「Deploy to GitHub Pages」→「Run workflow」から手動で公開することもできます。
 
 ホーム画面に追加しておくとアプリのように起動できます (PWA)。
 
