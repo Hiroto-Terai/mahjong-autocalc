@@ -18,6 +18,10 @@ jobs:
         with:
           node-version: "22"
 
+      # 検証用の擬似写真を描くのに日本語フォントが要る。
+      - name: 日本語フォントをインストール
+        run: sudo apt-get update && sudo apt-get install -y fonts-ipafont-gothic
+
       - name: 依存関係をインストール
         run: pip install -r requirements-dev.txt
 

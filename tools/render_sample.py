@@ -37,11 +37,25 @@ KANJI_NUM = "一二三四五六七八九"
 HONOR_CHARS = "東南西北白發中"
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont:
+class FontNotFoundError(RuntimeError):
+    """牌を描くための日本語フォントが見つからない。"""
+
+
+def font_path() -> str | None:
     for path in FONT_PATHS:
         if pathlib.Path(path).exists():
-            return ImageFont.truetype(path, size)
-    raise SystemExit("日本語フォントが見つかりません")
+            return path
+    return None
+
+
+def _font(size: int) -> ImageFont.FreeTypeFont:
+    path = font_path()
+    if path is None:
+        raise FontNotFoundError(
+            "日本語フォントが見つかりません "
+            "(Debian/Ubuntu: apt install fonts-ipafont-gothic)"
+        )
+    return ImageFont.truetype(path, size)
 
 
 def _centered(draw: ImageDraw.ImageDraw, box, text, font, fill) -> None:
@@ -223,7 +237,11 @@ def main() -> int:
     notation = sys.argv[1] if len(sys.argv) > 1 else "234567m234567p33s"
     out = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else "samples/hand.jpg")
     out.parent.mkdir(parents=True, exist_ok=True)
-    render_hand_photo(notation).save(out, quality=88)
+    try:
+        render_hand_photo(notation).save(out, quality=88)
+    except FontNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     print(f"wrote {out}")
     return 0
 

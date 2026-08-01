@@ -16,7 +16,15 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
-from render_sample import render_hand_photo  # noqa: E402
+from render_sample import font_path, render_hand_photo  # noqa: E402
+
+# 擬似写真の生成に日本語フォントが要る。無い環境では検証できないので飛ばす。
+if font_path() is None:
+    pytest.skip(
+        "日本語フォントが無いため画像認識のテストを飛ばします "
+        "(Debian/Ubuntu: apt install fonts-ipafont-gothic)",
+        allow_module_level=True,
+    )
 
 from mahjong_autocalc.tiles import parse_tiles, tile_name  # noqa: E402
 from mahjong_autocalc.vision import TileLibrary, extract, recognize  # noqa: E402
