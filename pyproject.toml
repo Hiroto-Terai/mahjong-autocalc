@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mahjong-autocalc"
+version = "0.1.0"
+description = "牌の写真から麻雀の点数を計算するローカル完結ツール"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pillow>=10.0"]
+
+[project.scripts]
+mahjong-autocalc = "mahjong_autocalc.cli:main"
+
+[tool.setuptools]
+packages = ["mahjong_autocalc", "mahjong_autocalc.vision"]
+
+[tool.setuptools.package-data]
+"mahjong_autocalc.vision" = ["glyphs.npz"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
