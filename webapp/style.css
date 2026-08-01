@@ -450,3 +450,42 @@ button.danger { background: var(--danger); color: #fff; border: none; border-rad
 
 .manual-actions { display: flex; gap: 8px; margin-top: 12px; }
 .manual-actions .primary { width: auto; flex: 1; padding: 10px; font-size: .9rem; }
+
+/* ---- 並び順でまとめて指定 ---- */
+
+.bulk {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-2);
+  font-size: .85rem;
+}
+.bulk summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.bulk .hint { margin: 10px 0; }
+
+.bulk-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.bulk-presets button { flex: 1 1 auto; min-height: 40px; }
+
+.bulk-custom { display: flex; gap: 8px; margin-top: 10px; }
+.bulk-custom input {
+  flex: 1;
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+}
+.bulk-custom button { white-space: nowrap; }
+
+.bulk-reverse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.bulk-reverse input { accent-color: var(--accent); }

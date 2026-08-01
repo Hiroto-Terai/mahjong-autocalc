@@ -2,7 +2,7 @@
 
 import {
   EAST, NUM_TILE_KINDS, HandTiles, Meld, MeldType,
-  doraIndicatorToDora, tileName,
+  doraIndicatorToDora, parseTiles, tileName,
 } from "./engine/tiles.js";
 import {
   NoYakuError, NotWinningHandError, calculate, makeContext,
@@ -92,6 +92,8 @@ async function init() {
     drawOverlay();
   });
   $("manual-apply").addEventListener("click", applyManualRegions);
+  buildBulkPresets();
+  $("bulk-apply").addEventListener("click", () => applyBulk($("bulk-notation").value.trim()));
   bindManualSelection();
   $("preview").addEventListener("load", drawOverlay);
   window.addEventListener("resize", drawOverlay);
@@ -390,6 +392,9 @@ function applyResult(result, { manual }) {
 
   renderTiles();
   drawOverlay();
+  // まだ牌を覚えていないなら、一括指定を最初から開いておく。
+  $("bulk-panel").open = library.missing().length > 0;
+  setStatus("bulk-status", "", "");
   $("tiles-card").hidden = false;
   $("context-card").hidden = false;
 }
@@ -733,6 +738,70 @@ function renderTile(tile) {
 
   button.addEventListener("click", () => openPicker(tile));
   return button;
+}
+
+// ---------------------------------------------------------------------------
+// 並び順でまとめて指定する (牌を覚えさせるときに使う)
+// ---------------------------------------------------------------------------
+
+const BULK_PRESETS = [
+  { label: "萬子 一〜九", notation: "123456789m" },
+  { label: "筒子 一〜九", notation: "123456789p" },
+  { label: "索子 一〜九", notation: "123456789s" },
+  { label: "字牌 東南西北白發中", notation: "1234567z" },
+];
+
+function buildBulkPresets() {
+  const container = $("bulk-presets");
+  container.innerHTML = "";
+  BULK_PRESETS.forEach((preset) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost small";
+    button.textContent = preset.label;
+    button.addEventListener("click", () => applyBulk(preset.notation));
+    container.appendChild(button);
+  });
+}
+
+/**
+ * 認識した牌に、指定した並びを左から順に割り当てる。
+ *
+ * 牌を覚えさせるときは並び順が分かっているので、1 枚ずつ選び直すより
+ * こちらのほうが速いし間違えにくい。
+ */
+function applyBulk(notation) {
+  let tiles;
+  try {
+    tiles = parseTiles(notation).tiles;
+  } catch (error) {
+    setStatus("bulk-status", `並びを読み取れません: ${error.message}`, "error");
+    return;
+  }
+
+  if (!state.tiles.length) {
+    setStatus("bulk-status", "先に写真を読み込んでください", "error");
+    return;
+  }
+  if (tiles.length !== state.tiles.length) {
+    setStatus(
+      "bulk-status",
+      `枚数が合いません (指定 ${tiles.length} 枚 / 認識 ${state.tiles.length} 枚)。` +
+      "「手で囲む」で枚数を合わせてから、もう一度押してください。",
+      "error"
+    );
+    return;
+  }
+
+  const order = $("bulk-reverse").checked ? [...tiles].reverse() : tiles;
+  state.tiles.forEach((tile, i) => {
+    tile.tile = order[i];
+    tile.uncertain = false;
+  });
+
+  renderTiles();
+  drawOverlay();
+  setStatus("bulk-status", `${tiles.length} 枚を割り当てました。「この結果を覚えさせる」を押してください。`, "ok");
 }
 
 // ---------------------------------------------------------------------------

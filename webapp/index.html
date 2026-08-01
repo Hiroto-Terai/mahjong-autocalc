@@ -87,6 +87,25 @@
       <span class="uncertain-legend">黄色</span>の牌は自信がないので確認をおすすめします。
     </p>
     <div id="groups"></div>
+
+    <details class="bulk" id="bulk-panel">
+      <summary>並び順でまとめて指定する（牌を覚えさせるとき）</summary>
+      <p class="hint">
+        牌を順番に並べて撮ったなら、1 枚ずつ直す必要はありません。
+        並びを選ぶと、左から順に割り当てます。
+      </p>
+      <div class="bulk-presets" id="bulk-presets"></div>
+      <div class="bulk-custom">
+        <input id="bulk-notation" type="text" inputmode="latin" autocapitalize="off"
+               autocorrect="off" spellcheck="false" placeholder="例: 123456789m">
+        <button type="button" class="ghost small" id="bulk-apply">この並びで割り当て</button>
+      </div>
+      <label class="bulk-reverse">
+        <input type="checkbox" id="bulk-reverse"> 右から左の順に並べた
+      </label>
+      <p id="bulk-status" class="status"></p>
+    </details>
+
     <div class="row-actions">
       <button id="learn-button" class="ghost" type="button">この結果を覚えさせる</button>
       <span id="learn-status" class="status"></span>
