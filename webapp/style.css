@@ -374,3 +374,25 @@ button.danger { background: var(--danger); color: #fff; border: none; border-rad
   .pick-actions { flex-direction: column; }
   .pick { flex-direction: row; gap: 8px; min-height: 0; }
 }
+
+/* ---- 検出位置の重ね表示 ---- */
+
+.preview-stage { position: relative; line-height: 0; }
+.preview-stage img { width: 100%; border-radius: 10px; display: block; }
+.preview-stage canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 10px;
+}
+
+.overlay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: .8rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.overlay-toggle input { accent-color: var(--accent); }

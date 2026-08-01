@@ -32,6 +32,7 @@ self.onmessage = (event) => {
       uncertain: g.uncertain,
       alternatives: g.alternatives,
       face: { width: g.face.width, height: g.face.height, data: g.face.data },
+      quad: g.quad,
       descriptor: g.features.descriptor,
     }));
 

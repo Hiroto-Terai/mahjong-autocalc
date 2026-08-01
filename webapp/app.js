@@ -38,7 +38,9 @@ const RED_FIVES = [4, 13, 22];
 const MAX_IMAGE_SIDE = 2000;
 
 const state = {
-  tiles: [],        // { index, tile, face, descriptor, uncertain, group, isWin, isRed }
+  tiles: [],          // { index, tile, face, descriptor, uncertain, group, isWin, isRed }
+  quads: [],          // 検出した牌の四隅 (重ね表示用)
+  decodedSize: null,  // 実際に認識にかけた画像の大きさ
   groupTypes: {},
   roundWind: EAST,
   seatWind: EAST,
@@ -78,6 +80,10 @@ async function init() {
   document.querySelectorAll("[data-add-dora]").forEach((button) => {
     button.addEventListener("click", () => addDora(button.dataset.addDora));
   });
+
+  $("show-overlay").addEventListener("change", drawOverlay);
+  $("preview").addEventListener("load", drawOverlay);
+  window.addEventListener("resize", drawOverlay);
 
   $("library-button").addEventListener("click", openLibrary);
   $("library-close").addEventListener("click", () => { $("library-modal").hidden = true; });
@@ -323,6 +329,8 @@ async function handleImage(file) {
   let result;
   try {
     const image = await decodeImage(file);
+    // 検出位置を写真の上に重ねて描くために、実際に処理した大きさを覚えておく。
+    state.decodedSize = { width: image.width, height: image.height };
     setStatus("upload-status", "認識中...", "");
     result = await runRecognition(image);
   } catch (error) {
@@ -331,6 +339,7 @@ async function handleImage(file) {
   }
 
   state.groupTypes = {};
+  state.quads = result.guesses.map((g) => g.quad);
   state.tiles = result.guesses.map((g) => ({
     index: g.index,
     tile: g.tile,
@@ -356,8 +365,74 @@ async function handleImage(file) {
   );
 
   renderTiles();
+  drawOverlay();
   $("tiles-card").hidden = false;
   $("context-card").hidden = false;
+}
+
+/**
+ * 検出した牌の位置を写真に重ねて描く。
+ *
+ * 判別を間違えているのか、そもそも切り出しに失敗しているのかは、これを見ると
+ * 一目で分かる。枠が牌とずれていれば判別以前の問題。
+ */
+function drawOverlay() {
+  const canvas = $("overlay");
+  const image = $("preview");
+  if (!state.quads.length || !state.decodedSize || !image.clientWidth) {
+    canvas.hidden = true;
+    return;
+  }
+  if (!$("show-overlay").checked) {
+    canvas.hidden = true;
+    return;
+  }
+  canvas.hidden = false;
+
+  const ratio = window.devicePixelRatio || 1;
+  const width = image.clientWidth;
+  const height = image.clientHeight;
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+
+  const context = canvas.getContext("2d");
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+
+  const scale = width / state.decodedSize.width;
+  context.lineWidth = Math.max(1, width / 400);
+  context.font = `${Math.max(9, width / 42)}px system-ui, sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+
+  state.quads.forEach((quad, i) => {
+    const tile = state.tiles[i];
+    const uncertain = !tile || tile.uncertain;
+    context.strokeStyle = uncertain ? "#e0a13a" : "#3fb984";
+    context.fillStyle = uncertain ? "rgba(224,161,58,.18)" : "rgba(63,185,132,.14)";
+
+    context.beginPath();
+    quad.forEach(([x, y], j) => {
+      const px = x * scale;
+      const py = y * scale;
+      if (j === 0) context.moveTo(px, py);
+      else context.lineTo(px, py);
+    });
+    context.closePath();
+    context.fill();
+    context.stroke();
+
+    const cx = (quad.reduce((s, p) => s + p[0], 0) / 4) * scale;
+    const cy = (quad.reduce((s, p) => s + p[1], 0) / 4) * scale;
+    context.fillStyle = "#fff";
+    context.strokeStyle = "rgba(0,0,0,.65)";
+    context.lineWidth = Math.max(2, width / 200);
+    context.strokeText(String(i + 1), cx, cy);
+    context.fillText(String(i + 1), cx, cy);
+    context.lineWidth = Math.max(1, width / 400);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +536,7 @@ function openPicker(tile) {
     tile.uncertain = false;
     closePicker();
     renderTiles();
+    drawOverlay();
   });
 
   const extra = $("picker-extra");

@@ -66,6 +66,7 @@ export function recognize(image, library = null) {
       uncertain: id === null || confidence < LOW_CONFIDENCE,
       alternatives: alternatives.map(([t, s]) => ({ tile: t, name: tileName(t), score: s })),
       face: tile.image,
+      quad: tile.quad,
       features,
     };
   });

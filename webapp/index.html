@@ -52,7 +52,14 @@
       <span class="dropzone-text">ここに画像をドロップしても読み込めます</span>
     </div>
     <div id="preview-wrap" hidden>
-      <img id="preview" alt="読み込んだ写真">
+      <div class="preview-stage">
+        <img id="preview" alt="読み込んだ写真">
+        <canvas id="overlay"></canvas>
+      </div>
+      <label class="overlay-toggle">
+        <input type="checkbox" id="show-overlay" checked>
+        切り出した位置を表示する
+      </label>
     </div>
     <p id="upload-status" class="status" role="status"></p>
   </section>
