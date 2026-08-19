@@ -6,49 +6,59 @@ import { extract } from "./features.js";
 import { classify } from "./heuristic.js";
 import { resize } from "./cv.js";
 
-// ライブラリの照合スコアがこの値を超えたら、規則ベースの推定より優先する。
+// 照合スコアがこの値を超えたら採用する。順に「自分で登録した牌 → 同梱の初期
+// ライブラリ → 規則ベース」と落とす。
+//
+// しきい値を下げて弱い一致まで拾うと、規則ベースなら当たっていた牌を潰して
+// しまい、かえって正解率が下がる (実測で 100% → 93%)。低い一致度は採用せず、
+// 次の段に譲る。
 export const LIBRARY_TRUST_THRESHOLD = 0.86;
+export const PRIOR_TRUST_THRESHOLD = 0.80;
 export const LOW_CONFIDENCE = 0.55;
 
-/** 1 枚ぶんの判定。ライブラリを優先し、駄目なら規則ベースに落とす。 */
-export function classifyOne(features, library) {
-  const libraryMatch = library ? library.match(features) : null;
+/**
+ * 1 枚ぶんの判定。
+ *
+ * 優先順位は「自分で登録した牌 → 同梱の初期ライブラリ → 規則ベース」。
+ * 手元のセットを登録してあれば一番強いが、無くても初期ライブラリで大半は読める。
+ */
+export function classifyOne(features, library, prior = null) {
+  const own = library ? library.match(features) : null;
+  const base = prior ? prior.match(features) : null;
   const rules = classify(features);
 
-  if (libraryMatch && libraryMatch.score >= LIBRARY_TRUST_THRESHOLD) {
+  const accept = (match, source) => ({
+    tile: match.tile,
     // 一致度が高くても 2 位と僅差なら確信度を下げる。
-    const confidence = Math.min(
-      0.99,
-      libraryMatch.score * (0.75 + Math.min(libraryMatch.margin, 0.2))
-    );
-    return {
-      tile: libraryMatch.tile,
-      confidence,
-      source: "library",
-      alternatives: [[libraryMatch.tile, libraryMatch.score], ...rules.slice(0, 3)],
-    };
-  }
+    confidence: Math.min(0.99, match.score * (0.75 + Math.min(match.margin, 0.2))),
+    source,
+    alternatives: [[match.tile, match.score], ...rules.slice(0, 3)],
+  });
+
+  if (own && own.score >= LIBRARY_TRUST_THRESHOLD) return accept(own, "library");
+  if (base && base.score >= PRIOR_TRUST_THRESHOLD) return accept(base, "prior");
 
   if (rules.length) {
     return { tile: rules[0][0], confidence: rules[0][1], source: "heuristic", alternatives: rules.slice(0, 4) };
   }
 
-  if (libraryMatch) {
+  const fallback = own || base;
+  if (fallback) {
     return {
-      tile: libraryMatch.tile,
-      confidence: libraryMatch.score * 0.5,
-      source: "library",
-      alternatives: [[libraryMatch.tile, libraryMatch.score]],
+      tile: fallback.tile,
+      confidence: fallback.score * 0.5,
+      source: own ? "library" : "prior",
+      alternatives: [[fallback.tile, fallback.score]],
     };
   }
 
   return { tile: null, confidence: 0, source: "unknown", alternatives: [] };
 }
 
-function describe(detected, library) {
+function describe(detected, library, prior) {
   return detected.map((tile) => {
     const features = extract(tile.image);
-    const { tile: id, confidence, source, alternatives } = classifyOne(features, library);
+    const { tile: id, confidence, source, alternatives } = classifyOne(features, library, prior);
     return {
       index: tile.order,
       tile: id,
@@ -80,8 +90,8 @@ function summarize(guesses, library) {
  * @param {object} image RGB 画像
  * @param {TileLibrary|null} library
  */
-export function recognize(image, library = null) {
-  return summarize(describe(detectTiles(image), library), library);
+export function recognize(image, library = null, prior = null) {
+  return summarize(describe(detectTiles(image), library, prior), library);
 }
 
 /**
@@ -93,7 +103,7 @@ export function recognize(image, library = null) {
  * @param {object} image RGB 画像 (recognize に渡すのと同じもの)
  * @param {{quad:number[][], count:number}[]} regions 画像座標での範囲と枚数
  */
-export function recognizeRegions(image, regions, library = null) {
+export function recognizeRegions(image, regions, library = null, prior = null) {
   // 自動検出と同じ土俵に乗せるため、同じ縮小をかけてから切り出す。
   let work = image;
   let scale = 1;
@@ -113,7 +123,7 @@ export function recognizeRegions(image, regions, library = null) {
     }
   });
 
-  return summarize(describe(detected, library), library);
+  return summarize(describe(detected, library, prior), library);
 }
 
 /**

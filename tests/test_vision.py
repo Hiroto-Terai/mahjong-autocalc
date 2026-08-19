@@ -130,7 +130,7 @@ def test_library_recognition_beats_heuristic(tmp_path):
     for notation in cases:
         expected = list(parse_tiles(notation).tiles)
         image = photo(notation, seed=3)
-        plain = [g.tile for g in recognize(image, None).guesses]
+        plain = [g.tile for g in recognize(image, None, prior=None).guesses]
         learned = [g.tile for g in recognize(image, library).guesses]
         assert len(plain) == len(expected)
         total += len(expected)
@@ -152,9 +152,64 @@ def test_library_marks_results_as_confident(tmp_path):
 
 
 def test_unknown_tiles_are_flagged_not_guessed_confidently():
-    """未登録の状態では、数の判別は自信なしとして扱われる。"""
-    result = recognize(photo("123456789s", seed=3), None)
+    """初期ライブラリも切った状態では、数の判別は自信なしとして扱われる。"""
+    result = recognize(photo("123456789s", seed=3), None, prior=None)
     assert result.uncertain_count > 0
+
+
+# ---------------------------------------------------------------------------
+# 同梱の初期ライブラリ
+# ---------------------------------------------------------------------------
+
+
+def test_prior_library_is_bundled_and_complete():
+    from mahjong_autocalc.vision import load_prior_library
+
+    prior = load_prior_library()
+    assert prior is not None, "初期ライブラリが同梱されていません"
+    assert prior.missing() == [], "初期ライブラリに欠けている牌があります"
+
+
+def test_prior_library_beats_rules_without_any_registration():
+    """何も登録していなくても、初期ライブラリのおかげで大幅に当たる。"""
+    cases = ["123456789m", "123456789p", "123456789s", "1234567z"]
+    rules_only = with_prior = total = 0
+    for notation in cases:
+        expected = list(parse_tiles(notation).tiles)
+        image = photo(notation, seed=3)
+        rules = [g.tile for g in recognize(image, None, prior=None).guesses]
+        prior = [g.tile for g in recognize(image, None).guesses]
+        assert len(rules) == len(expected)
+        total += len(expected)
+        rules_only += sum(1 for e, g in zip(expected, rules) if e == g)
+        with_prior += sum(1 for e, g in zip(expected, prior) if e == g)
+
+    assert with_prior > rules_only, f"初期ライブラリが効いていない ({rules_only} → {with_prior})"
+    assert with_prior / total >= 0.90, f"初期ライブラリでの正解率が低い: {with_prior}/{total}"
+
+
+def test_own_registration_is_used_and_does_not_hurt(tmp_path):
+    """自分の牌を登録しても、初期ライブラリだけのときより悪くならない。"""
+    library = TileLibrary(tmp_path / "lib.npz")
+    for notation in ("123456789m", "123456789p", "123456789s", "1234567z"):
+        _calibrate(library, notation, seed=7)
+
+    cases = ["123456789m", "123456789p", "123456789s", "1234567z"]
+    prior_only = with_own = total = 0
+    used_own = False
+    for notation in cases:
+        expected = list(parse_tiles(notation).tiles)
+        image = photo(notation, seed=3)
+        base = [g.tile for g in recognize(image, None).guesses]
+        result = recognize(image, library)
+        used_own = used_own or any(g.source == "library" for g in result.guesses)
+        own = [g.tile for g in result.guesses]
+        total += len(expected)
+        prior_only += sum(1 for e, g in zip(expected, base) if e == g)
+        with_own += sum(1 for e, g in zip(expected, own) if e == g)
+
+    assert used_own, "登録した牌がまったく使われていません"
+    assert with_own >= prior_only, f"登録して悪化しています ({prior_only} → {with_own})"
 
 
 def test_result_json_is_serializable():

@@ -14,6 +14,7 @@ import { detectTiles } from "../vision/detect.js";
 import { extract } from "../vision/features.js";
 import { TileLibrary } from "../vision/library.js";
 import { recognize } from "../vision/pipeline.js";
+import { buildPriorLibrary } from "../vision/prior.js";
 
 const RAW_DIR = process.env.MJ_RAW_DIR || "/tmp/mj-raw";
 const available = fs.existsSync(path.join(RAW_DIR, "index.json"));
@@ -148,4 +149,49 @@ test("全ケースで Python 版と同じ精度が出る", { skip }, () => {
     });
   }
   assert.ok(correct / total >= 0.95, `正解率 ${correct}/${total}\n${errors.join("\n")}`);
+});
+
+// ---------------------------------------------------------------------------
+// 同梱の初期ライブラリ
+// ---------------------------------------------------------------------------
+
+function loadPrior() {
+  const meta = JSON.parse(fs.readFileSync("webapp/vision/prior-library.json", "utf8"));
+  const bin = fs.readFileSync("webapp/vision/prior-library.bin");
+  return buildPriorLibrary(meta, bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.length));
+}
+
+test("初期ライブラリが同梱されていて 34 種そろっている", { skip }, () => {
+  const prior = loadPrior();
+  assert.deepEqual(prior.missing(), []);
+  assert.ok(prior.size > 0);
+});
+
+test("登録なしでも初期ライブラリで大幅に当たる", { skip }, () => {
+  const prior = loadPrior();
+  let rulesOnly = 0;
+  let withPrior = 0;
+  let total = 0;
+
+  for (const entry of index.filter((e) => e.seed === 3)) {
+    const image = loadImage(entry);
+    const rules = recognize(image, null, null).guesses.map((g) => g.tile);
+    const primed = recognize(image, null, prior).guesses.map((g) => g.tile);
+    if (rules.length !== entry.tiles.length) continue;
+    total += entry.tiles.length;
+    entry.tiles.forEach((expected, i) => {
+      if (rules[i] === expected) rulesOnly += 1;
+      if (primed[i] === expected) withPrior += 1;
+    });
+  }
+
+  assert.ok(withPrior > rulesOnly, `初期ライブラリが効いていない (${rulesOnly} → ${withPrior})`);
+  assert.ok(withPrior / total >= 0.90, `初期ライブラリでの正解率が低い: ${withPrior}/${total}`);
+});
+
+test("Python 版と JS 版で初期ライブラリの中身が一致する", { skip }, () => {
+  const meta = JSON.parse(fs.readFileSync("webapp/vision/prior-library.json", "utf8"));
+  const bin = fs.readFileSync("webapp/vision/prior-library.bin");
+  const expected = Object.values(meta.counts).reduce((a, b) => a + b, 0) * meta.dims;
+  assert.equal(bin.length, expected, "バイト数がメタ情報と合っていません");
 });

@@ -1,7 +1,7 @@
 // オフラインで動かすためのキャッシュ。
 // 一度開けば、以降は電波が無くても (機内モードでも) 起動する。
 
-const CACHE = "mahjong-autocalc-v1";
+const CACHE = "mahjong-autocalc-v2";
 
 const ASSETS = [
   "./",
@@ -24,6 +24,9 @@ const ASSETS = [
   "./vision/heuristic.js",
   "./vision/library.js",
   "./vision/pipeline.js",
+  "./vision/prior.js",
+  "./vision/prior-library.json",
+  "./vision/prior-library.bin",
 ];
 
 self.addEventListener("install", (event) => {

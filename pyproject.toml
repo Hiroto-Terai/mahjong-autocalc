@@ -27,7 +27,7 @@ mahjong-autocalc = "mahjong_autocalc.cli:main"
 packages = ["mahjong_autocalc", "mahjong_autocalc.vision"]
 
 [tool.setuptools.package-data]
-"mahjong_autocalc.vision" = ["glyphs.npz"]
+"mahjong_autocalc.vision" = ["glyphs.npz", "prior_library.npz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

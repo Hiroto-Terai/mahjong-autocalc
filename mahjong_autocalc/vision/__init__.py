@@ -9,6 +9,7 @@
 from .detect import DetectionError, detect_tiles
 from .features import extract
 from .library import TileLibrary
+from .prior import load_prior_library
 from .pipeline import (
     RecognitionResult,
     TileGuess,
@@ -22,6 +23,7 @@ __all__ = [
     "RecognitionResult",
     "TileGuess",
     "TileLibrary",
+    "load_prior_library",
     "decode_image",
     "detect_tiles",
     "extract",

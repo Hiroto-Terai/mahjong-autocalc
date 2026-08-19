@@ -11,6 +11,7 @@ from __future__ import annotations
 import pathlib
 import random
 import sys
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -28,6 +29,41 @@ BLACK = (34, 32, 30)
 RED = (183, 40, 36)
 GREEN = (24, 112, 62)
 BLUE = (36, 74, 148)
+
+
+@dataclass(frozen=True)
+class Style:
+    """牌のデザイン。既定値はこれまでと同じ見た目。
+
+    セットごとの違い (下地の色、刻印の色と大きさ、丸や竹の描き方) を差し替えて
+    「別メーカーの牌」を作れるようにするためのもの。規則ベースの分類がデザインを
+    またいでどれだけ通用するかを測るのに使う。
+    """
+
+    ivory: tuple = IVORY
+    edge: tuple = EDGE
+    black: tuple = BLACK
+    red: tuple = RED
+    green: tuple = GREEN
+    blue: tuple = BLUE
+
+    honor_scale: float = 1.0       # 字牌の文字の大きさ
+    numeral_scale: float = 1.0     # 萬子の漢数字の大きさ
+    man_scale: float = 1.0         # 「萬」の大きさ
+    man_is_red: bool = True        # 「萬」を赤で描くか (黒いセットもある)
+    numeral_gap: float = 0.02      # 漢数字と萬のあいだの空き
+
+    circle_scale: float = 1.0      # 筒子の丸の大きさ
+    circle_ring: bool = True       # 中心を下地色で抜く (ドーナツ) か
+    circle_outline: int = 2
+    circle_monochrome: bool = False  # 丸を一色で描くセットもある
+
+    stick_w: float = 1.0           # 索子の竹の太さ
+    stick_h: float = 1.0
+    stick_band: bool = True        # 竹の中央に明るい帯を入れるか
+
+
+DEFAULT_STYLE = Style()
 
 FONT_PATHS = [
     "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
@@ -112,14 +148,15 @@ def _stick_layout(rank: int) -> list[tuple[float, float]]:
             (0.3, 0.8), (0.5, 0.8), (0.7, 0.8)]
 
 
-def render_tile(tile: int, red_five: bool = False) -> Image.Image:
-    image = Image.new("RGB", (TILE_W, TILE_H), EDGE)
+def render_tile(tile: int, red_five: bool = False, style: Style = DEFAULT_STYLE) -> Image.Image:
+    image = Image.new("RGB", (TILE_W, TILE_H), style.edge)
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle(
-        (2, 2, TILE_W - 3, TILE_H - 3), radius=10, fill=(232, 227, 212)
+        (2, 2, TILE_W - 3, TILE_H - 3), radius=10,
+        fill=tuple(int((a + b) / 2) for a, b in zip(style.edge, style.ivory)),
     )
     face = (FACE_INSET, FACE_INSET, TILE_W - FACE_INSET - 1, TILE_H - FACE_INSET - 1)
-    draw.rounded_rectangle(face, radius=7, fill=IVORY)
+    draw.rounded_rectangle(face, radius=7, fill=style.ivory)
 
     suit = suit_of(tile)
     rank = rank_of(tile)
@@ -130,52 +167,61 @@ def render_tile(tile: int, red_five: bool = False) -> Image.Image:
         if char == "白":
             draw.rectangle(
                 (inner[0] + 8, inner[1] + 10, inner[2] - 8, inner[3] - 10),
-                outline=(196, 190, 172),
+                outline=tuple(max(0, c - 50) for c in style.ivory),
                 width=3,
             )
         else:
-            color = GREEN if char == "發" else (RED if char == "中" else BLACK)
-            _centered(draw, inner, char, _font(78), color)
+            color = style.green if char == "發" else (style.red if char == "中" else style.black)
+            _centered(draw, inner, char, _font(int(78 * style.honor_scale)), color)
 
     elif suit == "m":
-        top = (inner[0], inner[1], inner[2], inner[1] + (inner[3] - inner[1]) * 0.48)
-        bottom = (inner[0], inner[1] + (inner[3] - inner[1]) * 0.50, inner[2], inner[3])
-        numeral_color = RED if red_five else BLACK
-        _centered(draw, top, KANJI_NUM[rank - 1], _font(46), numeral_color)
-        _centered(draw, bottom, "萬", _font(50), RED)
+        split = 0.49 - style.numeral_gap / 2
+        top = (inner[0], inner[1], inner[2], inner[1] + (inner[3] - inner[1]) * split)
+        bottom = (inner[0], inner[1] + (inner[3] - inner[1]) * (split + style.numeral_gap),
+                  inner[2], inner[3])
+        numeral_color = style.red if red_five else style.black
+        _centered(draw, top, KANJI_NUM[rank - 1], _font(int(46 * style.numeral_scale)), numeral_color)
+        _centered(draw, bottom, "萬", _font(int(50 * style.man_scale)),
+                  style.red if style.man_is_red else style.black)
 
     elif suit == "p":
         radius = {1: 30, 2: 24, 3: 21, 4: 21, 5: 19, 6: 18, 7: 16, 8: 15, 9: 15}[rank]
-        palette = [BLUE, GREEN, RED]
+        radius = max(6, radius * style.circle_scale)
+        palette = [style.blue] * 3 if style.circle_monochrome else [style.blue, style.green, style.red]
         for i, (fx, fy) in enumerate(_circle_layout(rank)):
             cx = inner[0] + (inner[2] - inner[0]) * fx
             cy = inner[1] + (inner[3] - inner[1]) * fy
-            color = RED if (red_five and rank == 5 and i == 2) else palette[i % 3]
+            color = style.red if (red_five and rank == 5 and i == 2) else palette[i % 3]
             draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius),
-                         fill=color, outline=BLACK, width=2)
-            draw.ellipse((cx - radius * 0.3, cy - radius * 0.3,
-                          cx + radius * 0.3, cy + radius * 0.3), fill=IVORY)
+                         fill=color, outline=style.black, width=style.circle_outline)
+            if style.circle_ring:
+                draw.ellipse((cx - radius * 0.3, cy - radius * 0.3,
+                              cx + radius * 0.3, cy + radius * 0.3), fill=style.ivory)
 
     else:  # 索子
         if rank == 1:
             cx = (inner[0] + inner[2]) / 2
             cy = (inner[1] + inner[3]) / 2
-            draw.ellipse((cx - 26, cy - 40, cx + 26, cy + 20), fill=GREEN, outline=BLACK, width=2)
-            draw.ellipse((cx - 10, cy - 36, cx + 14, cy - 10), fill=IVORY, outline=BLACK)
-            draw.polygon([(cx - 4, cy + 18), (cx + 20, cy + 44), (cx - 18, cy + 44)], fill=RED)
+            draw.ellipse((cx - 26, cy - 40, cx + 26, cy + 20), fill=style.green, outline=style.black, width=2)
+            draw.ellipse((cx - 10, cy - 36, cx + 14, cy - 10), fill=style.ivory, outline=style.black)
+            draw.polygon([(cx - 4, cy + 18), (cx + 20, cy + 44), (cx - 18, cy + 44)], fill=style.red)
         else:
             for i, (fx, fy) in enumerate(_stick_layout(rank)):
                 cx = inner[0] + (inner[2] - inner[0]) * fx
                 cy = inner[1] + (inner[3] - inner[1]) * fy
-                color = RED if (red_five and rank == 5 and i == 2) else GREEN
-                draw.rounded_rectangle((cx - 9, cy - 21, cx + 9, cy + 21),
-                                       radius=5, fill=color, outline=BLACK, width=2)
-                draw.line((cx - 9, cy, cx + 9, cy), fill=IVORY, width=3)
+                color = style.red if (red_five and rank == 5 and i == 2) else style.green
+                hw = 9 * style.stick_w
+                hh = 21 * style.stick_h
+                draw.rounded_rectangle((cx - hw, cy - hh, cx + hw, cy + hh),
+                                       radius=5, fill=color, outline=style.black, width=2)
+                if style.stick_band:
+                    draw.line((cx - hw, cy, cx + hw, cy), fill=style.ivory, width=3)
 
     return image
 
 
-def render_row(tiles: list[int], reds: set[int], gap: int = 3) -> Image.Image:
+def render_row(tiles: list[int], reds: set[int], gap: int = 3,
+               style: Style = DEFAULT_STYLE) -> Image.Image:
     width = len(tiles) * TILE_W + (len(tiles) - 1) * gap
     strip = Image.new("RGB", (width, TILE_H), (60, 60, 60))
     used_red = set()
@@ -183,7 +229,7 @@ def render_row(tiles: list[int], reds: set[int], gap: int = 3) -> Image.Image:
         red = tile in reds and tile not in used_red
         if red:
             used_red.add(tile)
-        strip.paste(render_tile(tile, red), (i * (TILE_W + gap), 0))
+        strip.paste(render_tile(tile, red, style), (i * (TILE_W + gap), 0))
     return strip
 
 
@@ -228,9 +274,12 @@ def _perspective_coeffs(source, target):
     return np.linalg.solve(a, b).tolist()
 
 
-def render_hand_photo(notation: str, seed: int = 0) -> Image.Image:
+def render_hand_photo(notation: str, seed: int = 0,
+                      style: Style = DEFAULT_STYLE) -> Image.Image:
     parsed = parse_tiles(notation)
-    return photographize(render_row(list(parsed.tiles), set(parsed.red_fives)), seed)
+    return photographize(
+        render_row(list(parsed.tiles), set(parsed.red_fives), style=style), seed
+    )
 
 
 def main() -> int:

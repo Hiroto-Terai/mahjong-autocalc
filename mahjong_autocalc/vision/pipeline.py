@@ -13,9 +13,16 @@ from . import heuristic
 from .detect import DetectedTile, DetectionError, detect_tiles
 from .features import TileFeatures, extract
 from .library import TileLibrary
+from .prior import load_prior_library
 
-# ライブラリの照合スコアがこの値を超えたら、規則ベースの推定より優先する。
+# 照合スコアがこの値を超えたら採用する。順に「自分で登録した牌 → 同梱の初期
+# ライブラリ → 規則ベース」と落とす。
+#
+# しきい値を下げて弱い一致まで拾うと、規則ベースなら当たっていた牌を潰して
+# しまい、かえって正解率が下がる (実測で 100% → 93%)。低い一致度は採用せず、
+# 次の段に譲る。
 LIBRARY_TRUST_THRESHOLD = 0.86
+PRIOR_TRUST_THRESHOLD = 0.80
 LOW_CONFIDENCE = 0.55
 
 
@@ -89,40 +96,57 @@ def decode_image(data: bytes) -> np.ndarray:
 
 
 def classify_one(
-    features: TileFeatures, library: TileLibrary | None
+    features: TileFeatures,
+    library: TileLibrary | None,
+    prior: TileLibrary | None = None,
 ) -> tuple[int | None, float, str, list[tuple[int, float]]]:
-    """1 枚ぶんの判定。ライブラリを優先し、駄目なら規則ベースに落とす。"""
-    library_match = library.match(features) if library is not None else None
+    """1 枚ぶんの判定。
+
+    優先順位は「自分で登録した牌 → 同梱の初期ライブラリ → 規則ベース」。
+    """
+    own = library.match(features) if library is not None else None
+    base = prior.match(features) if prior is not None else None
     rules = heuristic.classify(features)
 
-    if library_match is not None and library_match.score >= LIBRARY_TRUST_THRESHOLD:
+    def accept(match, source):
         # 一致度が高くても 2 位と僅差なら確信度を下げる。
-        confidence = min(0.99, library_match.score * (0.75 + min(library_match.margin, 0.2)))
-        alternatives = [(library_match.tile, library_match.score)] + rules[:3]
-        return library_match.tile, confidence, "library", alternatives
+        confidence = min(0.99, match.score * (0.75 + min(match.margin, 0.2)))
+        return match.tile, confidence, source, [(match.tile, match.score)] + rules[:3]
+
+    if own is not None and own.score >= LIBRARY_TRUST_THRESHOLD:
+        return accept(own, "library")
+    if base is not None and base.score >= PRIOR_TRUST_THRESHOLD:
+        return accept(base, "prior")
 
     if rules:
         tile, score = rules[0]
         return tile, score, "heuristic", rules[:4]
 
-    if library_match is not None:
-        return library_match.tile, library_match.score * 0.5, "library", [
-            (library_match.tile, library_match.score)
-        ]
+    fallback = own or base
+    if fallback is not None:
+        source = "library" if own is not None else "prior"
+        return fallback.tile, fallback.score * 0.5, source, [(fallback.tile, fallback.score)]
 
     return None, 0.0, "unknown", []
 
 
 def recognize(
-    image: np.ndarray, library: TileLibrary | None = None
+    image: np.ndarray,
+    library: TileLibrary | None = None,
+    prior: TileLibrary | None | str = "default",
 ) -> RecognitionResult:
-    """写真から牌を認識する。"""
+    """写真から牌を認識する。
+
+    ``prior`` を省略すると同梱の初期ライブラリを使う。``None`` を渡すと使わない。
+    """
+    if prior == "default":
+        prior = load_prior_library()
     detected: list[DetectedTile] = detect_tiles(image)
 
     guesses: list[TileGuess] = []
     for tile_image in detected:
         features = extract(tile_image.image)
-        tile, confidence, source, alternatives = classify_one(features, library)
+        tile, confidence, source, alternatives = classify_one(features, library, prior)
         guesses.append(
             TileGuess(
                 index=tile_image.order,

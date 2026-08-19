@@ -2,6 +2,7 @@
 
 import { TileLibrary } from "./vision/library.js";
 import { recognize, recognizeRegions } from "./vision/pipeline.js";
+import { loadPriorLibrary } from "./vision/prior.js";
 
 /** メインスレッドから渡された素のオブジェクトをライブラリに戻す。 */
 function buildLibrary(samples) {
@@ -16,14 +17,16 @@ function buildLibrary(samples) {
   return library;
 }
 
-self.onmessage = (event) => {
+self.onmessage = async (event) => {
   const { id, image, library, regions } = event.data;
   try {
     const tileLibrary = buildLibrary(library);
+    // 同梱の初期ライブラリ。初回だけ読み込み、以降は使い回す。
+    const prior = await loadPriorLibrary();
     // regions が来たら利用者が指定した範囲だけを読む。無ければ自動検出。
     const result = regions && regions.length
-      ? recognizeRegions(image, regions, tileLibrary)
-      : recognize(image, tileLibrary);
+      ? recognizeRegions(image, regions, tileLibrary, prior)
+      : recognize(image, tileLibrary, prior);
 
     // 刻印マスクなど大きいものは返さず、必要なものだけ詰め直す。
     const guesses = result.guesses.map((g) => ({

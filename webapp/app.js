@@ -142,10 +142,13 @@ function startWorker() {
 
 /** Worker が使えない環境向けに、同じ処理をメインスレッドで行う。 */
 async function recognizeOnMainThread(image, samples, regions = null) {
-  const [{ recognize, recognizeRegions }, { TileLibrary }] = await Promise.all([
-    import("./vision/pipeline.js"),
-    import("./vision/library.js"),
-  ]);
+  const [{ recognize, recognizeRegions }, { TileLibrary }, { loadPriorLibrary }] =
+    await Promise.all([
+      import("./vision/pipeline.js"),
+      import("./vision/library.js"),
+      import("./vision/prior.js"),
+    ]);
+  const prior = await loadPriorLibrary();
 
   let localLibrary = null;
   if (Object.keys(samples).length) {
@@ -159,8 +162,8 @@ async function recognizeOnMainThread(image, samples, regions = null) {
   }
 
   const result = regions && regions.length
-    ? recognizeRegions(image, regions, localLibrary)
-    : recognize(image, localLibrary);
+    ? recognizeRegions(image, regions, localLibrary, prior)
+    : recognize(image, localLibrary, prior);
   return {
     guesses: result.guesses.map((g) => ({
       index: g.index,
@@ -182,7 +185,9 @@ async function recognizeOnMainThread(image, samples, regions = null) {
 }
 
 function updateCalibrationBanner() {
-  $("calibration-banner").hidden = library.missing().length === 0;
+  // 内蔵の参照データで読めるので、登録は必須ではない。案内は一度も登録して
+  // いないあいだだけ出す。
+  $("calibration-banner").hidden = library.size > 0;
 }
 
 function buildWindSelector(container, key) {
@@ -384,7 +389,7 @@ function applyResult(result, { manual }) {
   if (state.tiles.length) state.tiles[state.tiles.length - 1].isWin = true;
 
   const note = result.librarySize === 0
-    ? " 牌をまだ覚えていないので、直したうえで「覚えさせる」を押すと次から精度が上がります。"
+    ? " 間違いがあれば直して「覚えさせる」を押すと、あなたの牌を覚えて次から確実になります。"
     : "";
   const head = manual ? "指定した範囲から" : "";
   setStatus(
