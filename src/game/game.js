@@ -1,0 +1,138 @@
+import { PhysicsWorld } from '../physics/world.js';
+import { makeRng } from '../core/rng.js';
+import {
+  FRUITS, SPAWNABLE_TIERS, BOARD, DROP, DANGER_GRACE, COMBO, DEFAULT_SEED,
+} from '../config.js';
+
+export const STATE = { TITLE: 'title', PLAYING: 'playing', OVER: 'over' };
+
+/**
+ * Rules, scoring and the run lifecycle. Owns physics; knows nothing about
+ * rendering — it emits events that art/fx/ui/audio subscribe to, so the
+ * simulation stays testable headlessly.
+ */
+export class Game {
+  constructor({ seed = DEFAULT_SEED, events } = {}) {
+    this.events = events;
+    this.seed = seed;
+    this.state = STATE.TITLE;
+    this.physics = new PhysicsWorld({
+      onMerge: (m) => this._onMerge(m),
+      onImpact: (i) => this.events.emit('impact', i),
+    });
+    this.reset(seed);
+  }
+
+  reset(seed = this.seed) {
+    this.seed = seed;
+    this.rng = makeRng(seed);
+    this.physics.clear();
+    this.score = 0;
+    this.best = Number(localStorage.getItem('fc.best') || 0);
+    this.time = 0;
+    this.dropCooldown = 0;
+    this.comboCount = 0;
+    this.comboUntil = 0;
+    this.discovered = new Set([0]);
+    this.dangerHeld = 0;
+    this.state = STATE.PLAYING;
+    this.current = this._rollTier();
+    this.next = this._rollTier();
+    this.aimX = (BOARD.left + BOARD.right) / 2;
+    this.events.emit('reset', this);
+  }
+
+  _rollTier() {
+    // Weighted toward small fruit, exactly like the original's feel: you get a
+    // cherry far more often than a dekopon, which is what makes the board
+    // solvable rather than an avalanche of mid-tier junk.
+    const weights = [30, 26, 20, 14, 10].slice(0, SPAWNABLE_TIERS);
+    const total = weights.reduce((a, b) => a + b, 0);
+    let r = this.rng() * total;
+    for (let i = 0; i < weights.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return i;
+    }
+    return 0;
+  }
+
+  /** Clamp the claw so the fruit can never overlap a wall on release. */
+  clampAim(x, tier) {
+    const r = FRUITS[tier].radius;
+    return Math.max(BOARD.left + r + 1, Math.min(BOARD.right - r - 1, x));
+  }
+
+  update(dt, input) {
+    this.time += dt;
+    if (this.state === STATE.OVER) {
+      this.physics.step(dt);
+      if (input.takeRestart()) this.reset(this.seed + 1);
+      return;
+    }
+    if (this.state !== STATE.PLAYING) return;
+
+    input.update(dt);
+    this.aimX = this.clampAim(input.aimX, this.current);
+    this.dropCooldown = Math.max(0, this.dropCooldown - dt);
+
+    if (input.takeDrop() && this.dropCooldown === 0) this.drop();
+    if (input.takeRestart()) this.reset(this.seed + 1);
+
+    this.physics.step(dt);
+
+    if (this.time > this.comboUntil) this.comboCount = 0;
+
+    this._checkOverflow(dt);
+  }
+
+  drop() {
+    const tier = this.current;
+    const x = this.clampAim(this.aimX, tier);
+    const rec = this.physics.spawn(tier, x, DROP.y);
+    this.dropCooldown = DROP.cooldown;
+    this.current = this.next;
+    this.next = this._rollTier();
+    this.events.emit('drop', { tier, x, y: DROP.y, rec });
+    return rec;
+  }
+
+  _onMerge({ tier, x, y, rec, from }) {
+    const inCombo = this.time <= this.comboUntil;
+    this.comboCount = inCombo ? this.comboCount + 1 : 1;
+    this.comboUntil = this.time + COMBO.windowMs;
+
+    const mult = COMBO.multipliers[Math.min(this.comboCount - 1, COMBO.multipliers.length - 1)];
+    const gained = Math.round(FRUITS[tier].score * mult);
+    this.score += gained;
+    if (this.score > this.best) {
+      this.best = this.score;
+      localStorage.setItem('fc.best', String(this.best));
+    }
+
+    const isNew = !this.discovered.has(tier);
+    this.discovered.add(tier);
+
+    this.events.emit('merge', {
+      tier, x, y, rec, from, gained, combo: this.comboCount, mult, isNew,
+    });
+    if (tier === FRUITS.length - 1) this.events.emit('watermelon', { x, y });
+  }
+
+  _checkOverflow(dt) {
+    const worst = this.physics.overflowingSince(this.time);
+    if (worst) {
+      this.dangerHeld = worst.held;
+      this.events.emit('danger', { held: worst.held, ratio: Math.min(1, worst.held / DANGER_GRACE) });
+      if (worst.held >= DANGER_GRACE) this.gameOver();
+    } else if (this.dangerHeld !== 0) {
+      this.dangerHeld = 0;
+      this.events.emit('danger', { held: 0, ratio: 0 });
+    }
+  }
+
+  gameOver() {
+    if (this.state === STATE.OVER) return;
+    this.state = STATE.OVER;
+    this.events.emit('gameover', { score: this.score, best: this.best });
+  }
+}
