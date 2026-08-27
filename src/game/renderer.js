@@ -2,6 +2,9 @@ import { Sprite, Container } from 'pixi.js';
 import { bakeFruitTextures, ROT_FRAMES } from '../art/bake.js';
 import { FRUITS } from '../config.js';
 
+/** Duration of the spawn overshoot, ms. */
+const POP_MS = 220;
+
 /**
  * Draws physics bodies as pixel sprites.
  *
@@ -52,15 +55,26 @@ export class FruitRenderer {
       s.x = Math.round(x);
       s.y = Math.round(y);
 
-      // Pop-in: a brief overshoot so spawns and merges have weight.
+      // Sprite scale composes two independent channels so neither stomps the
+      // other: the spawn pop-in owned here, and `rec.fxSquash`, the impact
+      // deformation owned by the FX module.
+      let sx = 1, sy = 1;
+
       const age = nowMs - rec.bornAt;
-      if (age < 220) {
-        const t = age / 220;
-        const pop = 1 + Math.sin(t * Math.PI) * 0.18 * (1 - t);
-        s.scale.set(pop, 2 - pop);
-      } else if (s.scale.x !== 1) {
-        s.scale.set(1);
+      if (age < POP_MS) {
+        const t = age / POP_MS;
+        const pop = Math.sin(t * Math.PI) * 0.18 * (1 - t);
+        sx *= 1 + pop;
+        sy *= 1 - pop;
       }
+
+      const sq = rec.fxSquash;
+      if (sq) {
+        sx *= sq.x;
+        sy *= sq.y;
+      }
+
+      s.scale.set(sx, sy);
     }
 
     for (const [uid, s] of this.sprites) {

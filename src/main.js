@@ -41,6 +41,8 @@ async function boot() {
   ctx.audio = new Audio(ctx);
   ctx.input = new Input(ctx, mount);
   ctx.game = new Game({ seed, events: ctx.events });
+  // Boot to the attract screen unless a harness asks to skip it.
+  if (!params.has('play')) ctx.game.reset(seed, { toTitle: true });
 
   const render = (alpha, frameMs) => {
     const now = ctx.game.physics.engine.timing.timestamp;

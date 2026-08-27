@@ -72,6 +72,8 @@ try {
         G.detach();
         const { game } = G;
 
+        if (!scenario.title && game.state === 'title') game.start();
+
         if (scenario.lineup) {
           // Art sheet: every tier laid out on a grid, physics frozen, so the
           // critic grades the sprites themselves rather than a pile.
@@ -101,6 +103,21 @@ try {
           G.advance(wait);
         }
         G.advance(scenario.settle || 0);
+
+        if (scenario.forceGameOver) {
+          // Scripted play rarely overflows — merges keep clearing the pile.
+          // Watermelons are the terminal tier and can never merge, so a stack
+          // of them is the only fill guaranteed to survive to the grace timer.
+          for (let row = 0; row < 5; row++) {
+            for (let col = 0; col < 2; col++) {
+              game.physics.spawn(10, 96 + col * 128 + (row % 2) * 32, 390 - row * 96);
+            }
+            // Mid-tier fruit tucked into the gaps keeps the board looking
+            // played-in rather than like a crate of melons.
+            game.physics.spawn(6 + (row % 3), 160 - (row % 2) * 60, 350 - row * 96);
+          }
+          G.advance(6000);
+        }
 
         if (scenario.forceMerge) {
           // Drop a duplicate of the current fruit onto a matching resting one

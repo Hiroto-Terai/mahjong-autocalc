@@ -7,6 +7,12 @@
  */
 export const SCENARIOS = [
   {
+    name: 'title',
+    seed: 1234,
+    title: true,
+    note: 'Attract screen: title panel, logo, start prompt.',
+  },
+  {
     name: 'empty-board',
     seed: 1234,
     script: [],
@@ -51,8 +57,9 @@ export const SCENARIOS = [
   {
     name: 'game-over',
     seed: 99,
-    script: Array.from({ length: 48 }, (_, i) => [150 + ((i * 37) % 90), 420]),
-    settle: 3000,
+    script: Array.from({ length: 12 }, (_, i) => [70 + ((i * 53) % 180), 500]),
+    settle: 1200,
+    forceGameOver: true,
     note: 'Overflow + game-over panel.',
   },
 ];

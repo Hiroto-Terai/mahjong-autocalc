@@ -6,6 +6,10 @@ import {
 
 export const STATE = { TITLE: 'title', PLAYING: 'playing', OVER: 'over' };
 
+/** Ignore input this long after a run ends, so the fatal press does not
+ *  also skip the score screen. */
+const RESTART_LOCKOUT = 700;
+
 /**
  * Rules, scoring and the run lifecycle. Owns physics; knows nothing about
  * rendering — it emits events that art/fx/ui/audio subscribe to, so the
@@ -15,7 +19,6 @@ export class Game {
   constructor({ seed = DEFAULT_SEED, events } = {}) {
     this.events = events;
     this.seed = seed;
-    this.state = STATE.TITLE;
     this.physics = new PhysicsWorld({
       onMerge: (m) => this._onMerge(m),
       onImpact: (i) => this.events.emit('impact', i),
@@ -23,7 +26,8 @@ export class Game {
     this.reset(seed);
   }
 
-  reset(seed = this.seed) {
+  /** Full teardown to the attract screen. */
+  reset(seed = this.seed, { toTitle = false } = {}) {
     this.seed = seed;
     this.rng = makeRng(seed);
     this.physics.clear();
@@ -35,7 +39,7 @@ export class Game {
     this.comboUntil = 0;
     this.discovered = new Set([0]);
     this.dangerHeld = 0;
-    this.state = STATE.PLAYING;
+    this.state = toTitle ? STATE.TITLE : STATE.PLAYING;
     this.current = this._rollTier();
     this.next = this._rollTier();
     this.aimX = (BOARD.left + BOARD.right) / 2;
@@ -64,11 +68,28 @@ export class Game {
 
   update(dt, input) {
     this.time += dt;
-    if (this.state === STATE.OVER) {
+
+    if (this.state === STATE.TITLE) {
+      // Any press begins the run. Physics still ticks so the attract screen
+      // can show fruit settling behind the title.
+      input.update(dt);
       this.physics.step(dt);
-      if (input.takeRestart()) this.reset(this.seed + 1);
+      if (input.takeDrop() || input.takeRestart()) this.start();
       return;
     }
+
+    if (this.state === STATE.OVER) {
+      // Keep simulating so the pile visibly settles under the panel, but hold
+      // the restart for a beat — an instant restart on the same press that
+      // ended the run is the classic way to lose a player's score screen.
+      this.physics.step(dt);
+      this.overAge = (this.overAge || 0) + dt;
+      if (this.overAge > RESTART_LOCKOUT && (input.takeDrop() || input.takeRestart())) {
+        this.reset(this.seed + 1);
+      }
+      return;
+    }
+
     if (this.state !== STATE.PLAYING) return;
 
     input.update(dt);
@@ -78,11 +99,21 @@ export class Game {
     if (input.takeDrop() && this.dropCooldown === 0) this.drop();
     if (input.takeRestart()) this.reset(this.seed + 1);
 
+
     this.physics.step(dt);
 
     if (this.time > this.comboUntil) this.comboCount = 0;
 
     this._checkOverflow(dt);
+  }
+
+  /** Leave the attract screen and begin a run. */
+  start() {
+    this.physics.clear();
+    this.state = STATE.PLAYING;
+    this.time = 0;
+    this.dropCooldown = DROP.cooldown;
+    this.events.emit('start', this);
   }
 
   drop() {
@@ -133,6 +164,7 @@ export class Game {
   gameOver() {
     if (this.state === STATE.OVER) return;
     this.state = STATE.OVER;
+    this.overAge = 0;
     this.events.emit('gameover', { score: this.score, best: this.best });
   }
 }
