@@ -37,7 +37,7 @@ export class Game {
     this.dropCooldown = 0;
     this.comboCount = 0;
     this.comboUntil = 0;
-    this.discovered = new Set([0]);
+    this.discovered = new Set();
     this.dangerHeld = 0;
     this.state = toTitle ? STATE.TITLE : STATE.PLAYING;
     this.current = this._rollTier();
@@ -120,6 +120,9 @@ export class Game {
     const tier = this.current;
     const x = this.clampAim(this.aimX, tier);
     const rec = this.physics.spawn(tier, x, DROP.y);
+    // Tiers that come out of the claw count as seen; otherwise the evolution
+    // chart hides fruit the player has been handling all game.
+    this.discovered.add(tier);
     this.dropCooldown = DROP.cooldown;
     this.current = this.next;
     this.next = this._rollTier();
