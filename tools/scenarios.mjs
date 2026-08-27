@@ -32,10 +32,16 @@ export const SCENARIOS = [
     name: 'mid-game',
     seed: 4242,
     // Deliberately clustered so merges chain and mid-tier fruit appear.
-    script: Array.from({ length: 26 }, (_, i) => [
-      70 + ((i * 53) % 180), 620,
+    // 58 drops across the full width: enough for the pile to reach two thirds
+    // of the jar with a spread of tiers, which is the state a player actually
+    // spends most of a run looking at.
+    // Dropped faster than the pile can merge itself flat: a well-played board
+    // reaches equilibrium low in the jar, which is not the state worth
+    // grading art against.
+    script: Array.from({ length: 150 }, (_, i) => [
+      44 + ((i * 71) % 232), 200,
     ]),
-    settle: 2200,
+    settle: 2400,
     note: 'Full jar, mixed tiers: the shot that decides if the game looks AAA.',
   },
   {
