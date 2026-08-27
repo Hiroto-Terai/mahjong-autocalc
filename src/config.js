@@ -20,8 +20,12 @@ export const BOARD = {
   left: 28,
   right: 292,
   floor: 452,
+  /** Jar rim. Everything above this is HUD and claw space. Interior is
+   *  264x368, close to the roughly 4:5 playfield the genre settled on —
+   *  a taller jar makes early fruit look lost at the bottom. */
+  top: 84,
   /** Fruits resting above this line for DANGER_GRACE ms end the run. */
-  dangerY: 96,
+  dangerY: 112,
   /** Wall/floor thickness used for the static Matter bodies. */
   wallThickness: 24,
 };
@@ -84,7 +88,7 @@ export const PHYSICS = {
 /* Drop mechanics. */
 export const DROP = {
   /** y position of the claw / spawn line. */
-  y: 62,
+  y: 50,
   /** Minimum ms between drops. */
   cooldown: 420,
   /** Horizontal claw travel speed for keyboard input (px/s). */

@@ -24,10 +24,10 @@ export class Scene {
     g.clear();
     g.rect(0, 0, VIRTUAL_W, VIRTUAL_H).fill(0x141a2b);
     // Jar interior
-    g.rect(BOARD.left, 0, BOARD.right - BOARD.left, BOARD.floor).fill(0x1c2440);
+    g.rect(BOARD.left, BOARD.top, BOARD.right - BOARD.left, BOARD.floor - BOARD.top).fill(0x1c2440);
     // Jar walls
-    g.rect(BOARD.left - 3, 0, 3, BOARD.floor + 3).fill(0x4a5a86);
-    g.rect(BOARD.right, 0, 3, BOARD.floor + 3).fill(0x4a5a86);
+    g.rect(BOARD.left - 3, BOARD.top, 3, BOARD.floor - BOARD.top + 3).fill(0x4a5a86);
+    g.rect(BOARD.right, BOARD.top, 3, BOARD.floor - BOARD.top + 3).fill(0x4a5a86);
     g.rect(BOARD.left - 3, BOARD.floor, BOARD.right - BOARD.left + 6, 3).fill(0x4a5a86);
   }
 
