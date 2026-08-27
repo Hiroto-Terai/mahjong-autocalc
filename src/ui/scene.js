@@ -6,8 +6,11 @@ import { VIRTUAL_W, VIRTUAL_H, BOARD } from '../config.js';
  * Draws a flat backdrop, the jar interior, and the danger line.
  */
 export class Scene {
-  constructor(layers) {
+  constructor(ctx) {
+    this.ctx = ctx;
+    const layers = ctx.layers;
     this.layers = layers;
+    ctx.events.on('danger', ({ ratio }) => { this.dangerRatio = ratio; });
     this.bg = new Graphics();
     this.front = new Graphics();
     layers.background.addChild(this.bg);
@@ -28,7 +31,8 @@ export class Scene {
     g.rect(BOARD.left - 3, BOARD.floor, BOARD.right - BOARD.left + 6, 3).fill(0x4a5a86);
   }
 
-  update() {
+  update(dtMs, game) {
+    void dtMs; void game;
     const g = this.front;
     g.clear();
     // Danger line: dashed, and it heats up as the grace timer runs down.

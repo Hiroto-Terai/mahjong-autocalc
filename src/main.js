@@ -10,73 +10,86 @@ import { Fx } from './fx/fx.js';
 import { Audio } from './audio/audio.js';
 import { PHYSICS, DEFAULT_SEED } from './config.js';
 
+/**
+ * Wiring only.
+ *
+ * Every subsystem receives the shared `ctx` and subscribes itself to the
+ * events it cares about, so adding behaviour never means editing this file.
+ * Construction order is: context -> renderer -> presentation -> game.
+ */
 async function boot() {
   const mount = document.getElementById('stage');
   const view = await createApp(mount);
 
-  const events = new Events();
-  const renderer = new FruitRenderer(view.layers.fruit);
-  const scene = new Scene(view.layers);
-  const hud = new Hud(view.layers, renderer);
-  const fx = new Fx(view.layers, view.root);
-  const audio = new Audio();
-
-  // Screenshot / test harness can pin the seed via ?seed=
   const params = new URLSearchParams(location.search);
   const seed = params.has('seed') ? Number(params.get('seed')) : DEFAULT_SEED;
 
-  const game = new Game({ seed, events });
-  const input = new Input(view, mount);
+  /** Filled progressively; subsystems must read fields lazily, not at construct time. */
+  const ctx = {
+    view,
+    app: view.app,
+    root: view.root,
+    layers: view.layers,
+    events: new Events(),
+    params,
+  };
 
-  events.on('merge', ({ x, y, tier }) => { fx.burst(x, y, tier); audio.merge(tier); });
-  events.on('drop', () => audio.drop());
-  events.on('impact', ({ speed }) => audio.impact(speed));
-  events.on('gameover', () => audio.over());
-  events.on('danger', ({ ratio }) => { scene.dangerRatio = ratio; });
+  ctx.renderer = new FruitRenderer(ctx);
+  ctx.scene = new Scene(ctx);
+  ctx.fx = new Fx(ctx);
+  ctx.hud = new Hud(ctx);
+  ctx.audio = new Audio(ctx);
+  ctx.input = new Input(ctx, mount);
+  ctx.game = new Game({ seed, events: ctx.events });
+
+  const render = (alpha, frameMs) => {
+    const now = ctx.game.physics.engine.timing.timestamp;
+    ctx.renderer.sync(ctx.game, alpha, now);
+    ctx.fx.update(frameMs, ctx.game);
+    ctx.scene.update(frameMs, ctx.game);
+    ctx.hud.update(frameMs, ctx.game);
+  };
 
   const loop = new Loop({
     step: PHYSICS.timeStep,
     maxSubSteps: PHYSICS.maxSubSteps,
-    update: (dt) => game.update(dt, input),
-    render: (alpha, frameMs) => {
-      renderer.sync(game.physics, alpha, game.physics.engine.timing.timestamp);
-      fx.update(frameMs);
-      scene.update();
-      hud.update(game);
-    },
+    update: (dt) => ctx.game.update(dt, ctx.input),
+    render,
   });
+  ctx.loop = loop;
   loop.start();
-
-  const renderOnce = (alpha = 0, frameMs = PHYSICS.timeStep) => {
-    renderer.sync(game.physics, alpha, game.physics.engine.timing.timestamp);
-    fx.update(frameMs);
-    scene.update();
-    hud.update(game);
-    view.app.render();
-  };
 
   /**
    * Test hooks. The screenshot harness stops the RAF loop and drives the
    * simulation in exact fixed steps, so a given seed + script always produces
    * the identical frame — that is what makes visual regressions meaningful.
    */
-  const stubInput = {
-    aimX: 0, update() {}, takeDrop: () => false, takeRestart: () => false,
-  };
+  const stubInput = { aimX: 0, update() {}, takeDrop: () => false, takeRestart: () => false };
   window.__game = {
-    game, loop, view, renderer, events, input, fx, scene, hud,
-    renderOnce,
+    ...ctx,
+    game: ctx.game,
+    renderOnce(alpha = 0, frameMs = PHYSICS.timeStep) {
+      render(alpha, frameMs);
+      view.app.render();
+    },
     /** Advance the simulation by `ms` of game time without rendering. */
     advance(ms) {
       const n = Math.round(ms / PHYSICS.timeStep);
-      for (let i = 0; i < n; i++) game.update(PHYSICS.timeStep, stubInput);
+      for (let i = 0; i < n; i++) ctx.game.update(PHYSICS.timeStep, stubInput);
     },
-    /** Drop the held fruit at virtual-x `x`. */
+    /** Advance presentation-only time (particles, tweens) without physics. */
+    advanceFx(ms, sliceMs = PHYSICS.timeStep) {
+      for (let t = 0; t < ms; t += sliceMs) {
+        ctx.fx.update(sliceMs, ctx.game);
+        ctx.scene.update(sliceMs, ctx.game);
+        ctx.hud.update(sliceMs, ctx.game);
+      }
+    },
     dropAt(x) {
-      game.aimX = game.clampAim(x, game.current);
-      return game.drop();
+      ctx.game.aimX = ctx.game.clampAim(x, ctx.game.current);
+      return ctx.game.drop();
     },
-    detach() { loop.stop(); audio.enabled = false; },
+    detach() { loop.stop(); ctx.audio.enabled = false; },
   };
 }
 

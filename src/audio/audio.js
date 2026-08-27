@@ -1,6 +1,16 @@
 /** Procedural SFX. BASELINE — owned by the audio pass. */
 export class Audio {
-  constructor() { this.ctx = null; this.enabled = true; }
+  constructor(appCtx) {
+    this.app = appCtx;
+    /** WebAudio context, created lazily on first sound (autoplay policy). */
+    this.ctx = null;
+    this.enabled = true;
+    const ev = appCtx.events;
+    ev.on('merge', ({ tier }) => this.merge(tier));
+    ev.on('drop', () => this.drop());
+    ev.on('impact', ({ speed }) => this.impact(speed));
+    ev.on('gameover', () => this.over());
+  }
   _ensure() {
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;

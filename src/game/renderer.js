@@ -11,7 +11,9 @@ import { FRUITS } from '../config.js';
  *     GPU never resamples the art
  */
 export class FruitRenderer {
-  constructor(layer) {
+  constructor(ctx) {
+    this.ctx = ctx;
+    const layer = ctx.layers.fruit;
     this.layer = layer;
     this.container = new Container();
     layer.addChild(this.container);
@@ -20,7 +22,8 @@ export class FruitRenderer {
     this.sprites = new Map();
   }
 
-  sync(physics, alpha, nowMs) {
+  sync(game, alpha, nowMs) {
+    const physics = game.physics;
     const seen = new Set();
 
     for (const rec of physics.fruits.values()) {

@@ -7,8 +7,10 @@ import { VIRTUAL_W, BOARD, DROP, FRUITS } from '../config.js';
  * replaces this with a bitmap pixel font.
  */
 export class Hud {
-  constructor(layers, renderer) {
-    this.renderer = renderer;
+  constructor(ctx) {
+    this.ctx = ctx;
+    const layers = ctx.layers;
+    this.renderer = ctx.renderer;
     this.root = new Container();
     layers.ui.addChild(this.root);
 
@@ -35,7 +37,8 @@ export class Hud {
     layers.overlay.addChild(this.overlay);
   }
 
-  update(game) {
+  update(dtMs, game) {
+    void dtMs;
     this.score.text = String(game.score);
     this.best.text = `BEST ${game.best}`;
 

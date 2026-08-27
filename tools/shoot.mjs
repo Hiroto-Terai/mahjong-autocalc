@@ -15,6 +15,8 @@ import { SCENARIOS } from './scenarios.mjs';
 
 const OUT = process.env.SHOT_DIR || 'shots';
 const PORT = Number(process.env.SHOT_PORT || 4173);
+// Per-agent build dir: parallel agents must not race on a shared dist/.
+const DIST = process.env.SHOT_DIST || 'dist';
 
 async function waitForServer(url, tries = 60) {
   for (let i = 0; i < tries; i++) {
@@ -29,11 +31,11 @@ async function waitForServer(url, tries = 60) {
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 
-const build = spawn('npx', ['vite', 'build'], { stdio: 'inherit' });
+const build = spawn('npx', ['vite', 'build', '--outDir', DIST], { stdio: 'inherit' });
 await new Promise((res, rej) =>
   build.on('exit', (c) => (c === 0 ? res() : rej(new Error('build failed')))));
 
-const server = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
+const server = spawn('npx', ['vite', 'preview', '--outDir', DIST, '--port', String(PORT), '--strictPort'], {
   stdio: 'ignore',
 });
 process.on('exit', () => server.kill());

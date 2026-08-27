@@ -2,10 +2,12 @@ import { Container, Graphics } from 'pixi.js';
 
 /** Particles, shake and merge bursts. BASELINE — owned by the FX pass. */
 export class Fx {
-  constructor(layers, root) {
+  constructor(ctx) {
+    this.ctx = ctx;
     this.layer = new Container();
-    layers.fx.addChild(this.layer);
-    this.root = root;
+    ctx.layers.fx.addChild(this.layer);
+    this.root = ctx.root;
+    ctx.events.on('merge', ({ x, y, tier }) => this.burst(x, y, tier));
     this.parts = [];
     this.shake = 0;
   }
@@ -22,7 +24,8 @@ export class Fx {
     this.shake = Math.min(6, 1.5 + tier * 0.4);
   }
 
-  update(dt) {
+  update(dt, game) {
+    void game;
     const s = dt / 1000;
     for (let i = this.parts.length - 1; i >= 0; i--) {
       const p = this.parts[i];
