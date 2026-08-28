@@ -1,7 +1,8 @@
 import { PhysicsWorld } from '../physics/world.js';
 import { makeRng } from '../core/rng.js';
 import {
-  FRUITS, SPAWNABLE_TIERS, BOARD, DROP, DANGER_GRACE, COMBO, DEFAULT_SEED,
+  FRUITS, SPAWNABLE_TIERS, BOARD, BOARD_W, DROP, DANGER_GRACE, COMBO,
+  DEFAULT_SEED, PHYSICS,
 } from '../config.js';
 
 export const STATE = { TITLE: 'title', PLAYING: 'playing', OVER: 'over' };
@@ -43,6 +44,7 @@ export class Game {
     this.current = this._rollTier();
     this.next = this._rollTier();
     this.aimX = (BOARD.left + BOARD.right) / 2;
+    if (toTitle) this._seedAttractPile();
     this.events.emit('reset', this);
   }
 
@@ -105,6 +107,25 @@ export class Game {
     if (this.time > this.comboUntil) this.comboCount = 0;
 
     this._checkOverflow(dt);
+  }
+
+  /**
+   * Decorative fruit behind the title panel. An empty jar on the attract
+   * screen sells nothing; a settled pile shows the player what the game is
+   * before they have pressed anything.
+   */
+  _seedAttractPile() {
+    const tiers = [8, 5, 6, 3, 4, 2, 5, 1, 3, 0, 2, 4];
+    for (let i = 0; i < tiers.length; i++) {
+      const t = tiers[i];
+      const x = BOARD.left + FRUITS[t].radius + 6
+        + this.rng() * (BOARD_W - FRUITS[t].radius * 2 - 12);
+      this.physics.spawn(t, x, BOARD.floor - 40 - i * 26);
+    }
+    // Settle them before the first frame so the title never opens on fruit
+    // visibly raining into place.
+    for (let i = 0; i < 900; i++) this.physics.step(PHYSICS.timeStep);
+    for (const rec of this.physics.fruits.values()) rec.bornAt = -1e6;
   }
 
   /** Leave the attract screen and begin a run. */
