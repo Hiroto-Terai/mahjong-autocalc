@@ -7,7 +7,8 @@
  * voice can leak: everything it creates is stopped at a time computed here.
  */
 import {
-  degreeHz, semiHz, mergeVoicing, CADENCE, CADENCE_CHORD, FANFARE_RUN, FANFARE_CHORD,
+  degreeHz, semiHz, mergeVoicing, CADENCE, CADENCE_CHORD,
+  FANFARE_RUN, FANFARE_CHORD, FANFARE_NOTE_SEC,
 } from './theory.js';
 
 const SILENT = 0.0001;
@@ -109,7 +110,10 @@ export function renderMerge(ctx, bus, t, { tier = 0, combo = 1, isNew = false, l
   const send = 0.14 + big * 0.30 + chain * 0.10;
   // Low chimes need more amplitude for the same loudness, and the top of the
   // chain is shrill enough that it wants pulling back.
-  const amp = level * (0.88 + big * 0.26 - big * big * 0.38) * (deg > 17 ? 0.82 : 1);
+  // Chimes get quieter as they climb: equal amplitude at 3.5kHz is painful
+  // next to the same amplitude at 200Hz.
+  const bright = Math.pow(2, -Math.max(0, deg - 16) * 0.10);
+  const amp = level * (0.88 + big * 0.26 - big * big * 0.38) * bright;
 
   // Transient: a noise chiff tuned off the fundamental so it belongs to the
   // note rather than sitting on top of it as a separate "tsk".
@@ -124,6 +128,9 @@ export function renderMerge(ctx, bus, t, { tier = 0, combo = 1, isNew = false, l
   });
 
   for (const p of PARTIALS) {
+    // A partial up here is inaudible on every speaker a browser game reaches;
+    // scheduling it only costs voices during a pile-up.
+    if (f * p.r > 15000) continue;
     // Small fruit keep their upper partials (bright, light); the watermelon
     // sheds them so what is left is fundamental and body.
     const tilt = p.r === 1 ? 1 : 1 - big * 0.35;
@@ -326,26 +333,26 @@ export function renderWatermelon(ctx, bus, t) {
   });
 
   FANFARE_RUN.forEach((deg, i) => {
-    const when = t + i * 0.072;
+    const when = t + i * FANFARE_NOTE_SEC;
     const f = degreeHz(deg);
-    ping(ctx, bus, when, { freq: f, amp: 0.16, decay: 0.30, send: 0.3, bend: 1.03 });
-    ping(ctx, bus, when, { freq: f * 2.01, amp: 0.055, decay: 0.16, send: 0.2 });
+    // Each note decays inside its own slot, so the run reads as six notes
+    // rather than one thickening chord.
+    ping(ctx, bus, when, { freq: f, amp: 0.17, decay: 0.26, send: 0.3, bend: 1.03 });
+    ping(ctx, bus, when, { freq: f * 2.01, amp: 0.05, decay: 0.14, send: 0.2 });
     noise(ctx, bus, when, { dur: 0.012, amp: 0.05, freq: clamp(f * 3, 800, 6000), q: 1, attack: 0.001 });
   });
 
-  const hit = t + FANFARE_RUN.length * 0.072 + 0.05;
-  FANFARE_CHORD.forEach((semi, i) => {
+  const hit = t + FANFARE_RUN.length * FANFARE_NOTE_SEC + 0.06;
+  for (const { semi, gain, decay } of FANFARE_CHORD) {
     const f = semiHz(semi);
-    ping(ctx, bus, hit, {
-      freq: f, amp: 0.15 / (1 + i * 0.35), decay: 1.6 - i * 0.12, send: 0.5, bend: 1.02,
-    });
-    ping(ctx, bus, hit + 0.02, {
-      freq: f * 2.01, amp: 0.05 / (1 + i * 0.4), decay: 0.7, send: 0.4,
-    });
-  });
+    ping(ctx, bus, hit, { freq: f, amp: gain, decay, send: 0.5, bend: 1.02 });
+    ping(ctx, bus, hit + 0.02, { freq: f * 2.01, amp: gain * 0.3, decay: decay * 0.45, send: 0.4 });
+  }
   noise(ctx, bus, hit, { dur: 0.05, amp: 0.14, freq: 3000, freqEnd: 700, q: 0.8, attack: 0.001, send: 0.3 });
-  // Shimmer over the sustain: the top of the chord, an octave up, delayed.
-  ping(ctx, bus, hit + 0.14, { freq: semiHz(36), amp: 0.045, decay: 1.1, send: 0.6 });
+  // Two shimmering octaves above the chord, entering late and outlasting the
+  // root: they are what keeps the tail of the fanfare bright.
+  ping(ctx, bus, hit + 0.10, { freq: semiHz(36), amp: 0.075, decay: 1.7, send: 0.6 });
+  ping(ctx, bus, hit + 0.20, { freq: semiHz(43), amp: 0.055, decay: 1.5, send: 0.7 });
 }
 
 /* ------------------------------------------------------------------ *

@@ -50,9 +50,15 @@ export function tierDegree(tier) {
  * even though its fruit are getting bigger.
  */
 export const COMBO_LIFT = 3;
-/** Degree 22 is E7. Above that a chime stops reading as musical and starts
- *  reading as a smoke alarm. */
-export const MAX_DEGREE = 22;
+/**
+ * Degree 25 is A7 (3520Hz) — the top note of a piano, and the highest a chime
+ * can land before it stops reading as a note at all. The ceiling has to clear
+ * a full six-link chain: the longest run the combo table rewards starts at
+ * tier 0 and ends at degree 25 exactly, so no realistic chain ever folds.
+ * Voices are rolled off with degree so the top of the range is a sparkle
+ * rather than a shriek.
+ */
+export const MAX_DEGREE = 25;
 
 /**
  * Where a merge lands, and how many octaves the run has already folded.
@@ -86,7 +92,23 @@ export const PROGRESSION = [
 export const CADENCE = [19, 17, 15, 12];
 export const CADENCE_CHORD = [0, 12, 15, 19];
 
-/** Ascending Am arpeggio (pentatonic degrees) then a wide Am voicing in
- *  semitones, for the watermelon fanfare. */
+/**
+ * Watermelon fanfare: an ascending Am arpeggio (pentatonic degrees) landing on
+ * a wide Am voicing (semitones).
+ *
+ * The chord is weighted and damped from the *top* down, not the bottom up. A
+ * chord voiced with its root loudest and longest decays into a low drone —
+ * the tail of the biggest moment in the game ends up duller than the run that
+ * led into it, which is the opposite of a fanfare.
+ */
 export const FANFARE_RUN = [5, 6, 8, 10, 11, 13];
-export const FANFARE_CHORD = [0, 12, 15, 19, 24];
+/** Seconds between run notes. Exported so the probe can measure the run
+ *  note-by-note instead of guessing where the notes are. */
+export const FANFARE_NOTE_SEC = 0.085;
+export const FANFARE_CHORD = [
+  { semi: 0,  gain: 0.055, decay: 0.85 },  // A2 — foundation only
+  { semi: 12, gain: 0.10,  decay: 1.5 },   // A3
+  { semi: 15, gain: 0.13,  decay: 1.8 },   // C4
+  { semi: 19, gain: 0.14,  decay: 1.9 },   // E4 — the voice that carries
+  { semi: 24, gain: 0.13,  decay: 1.7 },   // A4
+];
