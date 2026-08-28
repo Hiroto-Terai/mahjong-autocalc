@@ -42,7 +42,9 @@ process.on('exit', () => server.kill());
 
 try {
   await waitForServer(`http://localhost:${PORT}/`);
-  await rm(OUT, { recursive: true, force: true });
+  // Only a full run owns the directory; a single-scenario run must not delete
+  // the captures it was not asked to retake.
+  if (only.length === 0) await rm(OUT, { recursive: true, force: true });
   await mkdir(OUT, { recursive: true });
 
   // The image ships Chromium 1194; the pinned Playwright wants a newer build,
