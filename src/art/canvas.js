@@ -77,16 +77,38 @@ export class PixBuf {
  * job is to *not* look like part of the sphere.
  * ------------------------------------------------------------------ */
 
-/** Square brush along a polyline; width tapers linearly from w0 to w1. */
+/**
+ * Square brush swept along a polyline, width tapering from w0 to w1.
+ *
+ * The segments are walked a texel at a time rather than stamped at the given
+ * vertices: a two-point stem otherwise renders as two disconnected blobs with
+ * a gap where the stem should be.
+ */
 export function stroke(buf, pts, w0, w1, colour) {
-  for (let i = 0; i < pts.length; i++) {
-    const t = pts.length > 1 ? i / (pts.length - 1) : 0;
-    const w = Math.max(1, Math.round(w0 + (w1 - w0) * t));
-    const x = Math.round(pts[i][0]);
-    const y = Math.round(pts[i][1]);
+  const total = pts.length - 1;
+  if (total < 0) return;
+  const stamp = (x, y, w) => {
     const o = (w - 1) >> 1;
     for (let dy = 0; dy < w; dy++) {
       for (let dx = 0; dx < w; dx++) buf.set(x - o + dx, y - o + dy, colour, 255);
+    }
+  };
+  if (total === 0) {
+    stamp(Math.round(pts[0][0]), Math.round(pts[0][1]), Math.max(1, Math.round(w0)));
+    return;
+  }
+  for (let i = 0; i < total; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[i + 1];
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay)));
+    for (let k = 0; k <= steps; k++) {
+      const f = k / steps;
+      const t = (i + f) / total;
+      stamp(
+        Math.round(ax + (bx - ax) * f),
+        Math.round(ay + (by - ay) * f),
+        Math.max(1, Math.round(w0 + (w1 - w0) * t)),
+      );
     }
   }
 }
@@ -148,19 +170,6 @@ export function leaf(buf, ax, ay, bx, by, halfW, dark, mid, light) {
       else if (s > 0.34) c = dark;
       if (rib && Math.abs(d) < 0.7 && t > 0.12 && t < 0.92) c = dark;
       buf.set(x, y, c, 255);
-    }
-  }
-}
-
-/** Filled disc, scan-converted so the edge lands on whole texels. */
-export function fillDisc(buf, cx, cy, r, colour) {
-  const R = Math.max(0, r);
-  const x0 = Math.round(cx);
-  const y0 = Math.round(cy);
-  const n = Math.ceil(R);
-  for (let y = -n; y <= n; y++) {
-    for (let x = -n; x <= n; x++) {
-      if (x * x + y * y <= R * R) buf.set(x0 + x, y0 + y, colour, 255);
     }
   }
 }

@@ -1,7 +1,7 @@
 import { Texture, Rectangle, ImageSource } from 'pixi.js';
 import { FRUITS } from '../config.js';
 import { FRUIT_ART, detailFor } from './fruits.js';
-import { quantIndex, pick, bayer, mix, toHex } from './palette.js';
+import { quantIndex, pick, bayer, toHex } from './palette.js';
 import { PixBuf } from './canvas.js';
 
 /** Rotation frames baked per fruit. Higher = smoother spin, more VRAM. */
@@ -14,67 +14,90 @@ const LIGHT = (() => {
   return v.map((c) => c / len);
 })();
 
-/** Direction of the cool bounce rim: opposite the key, in screen space. */
-const BOUNCE = [0.64, 0.77];
-
 /** Ambient floor. Below this the unlit side stops holding its silhouette. */
 const AMBIENT = 0.17;
+
+/**
+ * The key light's response curve, tabulated. It is evaluated once per texel of
+ * every rotation frame — a fractional `pow` there costs more than the shading
+ * maths around it, and the result is quantised to five stops regardless.
+ */
+const KEY_CURVE = (() => {
+  const t = new Float32Array(258);
+  for (let i = 0; i <= 257; i++) t[i] = (Math.min(1, i / 256)) ** 0.85;
+  return t;
+})();
 
 /* Per size bracket (tiny .. huge). Detail has to scale with the sprite: an
  * 8px-radius cherry has room for three shades and one highlight texel, and
  * handing it the watermelon's settings is what turns small fruit into mud. */
 const STOPS = [3, 4, 5, 5, 5];
 /** Width, in texels, of the dithered ribbon either side of a stop boundary. */
-const DITHER_TEXELS = [0, 1.6, 2.2, 2.6, 3.0];
-/** Thickness of the bounce rim along the shadow edge, in texels. */
-const RIM_TEXELS = [1, 1, 1.5, 2, 2];
+const DITHER_TEXELS = [0, 1.6, 2.2, 2.6, 3];
+/** Depth, in texels, of the occluded band around the silhouette. */
+const RIM_TEXELS = [1, 1.5, 2, 2.5, 3];
 
 /** Object-space extent the marking grid covers, and its cells per texel. */
-const GRID_SPAN = 2.3;
+const GRID_SPAN = 2.4;
 const GRID_DENSITY = 2;
 
 /**
  * Evaluate a fruit's surface markings once into an object-space grid.
  *
  * Markings are a pure function of object space — that is the whole point of
- * sampling them there — so paying for asin, Voronoi and lattice maths on every
+ * sampling them there — so paying for asin, Worley and lattice maths on every
  * texel of all 24 rotations is 24x more work than the answer needs. Two cells
  * per texel keeps a stripe edge inside half a texel of where it belongs.
  */
 function markingGrid(art, R, d) {
   const n = Math.max(24, Math.round(GRID_SPAN * R * GRID_DENSITY));
-  const blend = new Float32Array(n * n);
-  const add = new Float32Array(n * n);
-  const c = { d, R, u: 0, v: 0, lon: 0, lat: 0, uw: 0, vw: 0, add: 0 };
+  const off = new Float32Array(n * n);
+  const c = { d, R, u: 0, v: 0, uw: 0, vw: 0 };
+  const half = GRID_SPAN / 2;
   for (let j = 0; j < n; j++) {
-    const v = -GRID_SPAN / 2 + (GRID_SPAN * (j + 0.5)) / n;
+    const v = -half + (GRID_SPAN * (j + 0.5)) / n;
     for (let i = 0; i < n; i++) {
-      const u = -GRID_SPAN / 2 + (GRID_SPAN * (i + 0.5)) / n;
-      const cosLat = Math.sqrt(Math.max(0, 1 - v * v));
-      c.u = u; c.v = v; c.add = 0;
-      c.lat = Math.asin(Math.max(-1, Math.min(1, v)));
-      c.lon = Math.asin(Math.max(-1, Math.min(1, u / Math.max(cosLat, 1e-3))));
-      // Sphere-warped coordinates: markings compress toward the silhouette
+      const u = -half + (GRID_SPAN * (i + 0.5)) / n;
+      c.u = u;
+      c.v = v;
+      // Sphere-warped coordinates: markings tighten toward the silhouette
       // like a real surface curving away, instead of sliding off flat.
       const rr = Math.hypot(u, v);
-      const w = rr > 1e-4 ? Math.asin(Math.min(1, rr)) / (rr * Math.PI * 0.5) : 0.6366;
-      c.uw = u * w; c.vw = v * w;
-      const k = j * n + i;
-      blend[k] = art.surf(c);
-      add[k] = c.add;
+      const w = rr > 1e-4 ? Math.asin(Math.min(1, rr)) / (rr * Math.PI * 0.5) : 2 / Math.PI;
+      c.uw = u * w;
+      c.vw = v * w;
+      off[j * n + i] = art.surf(c);
     }
   }
   const scale = n / GRID_SPAN;
-  const half = GRID_SPAN / 2;
   return {
+    off,
     at(u, v) {
       const i = Math.max(0, Math.min(n - 1, ((u + half) * scale) | 0));
       const j = Math.max(0, Math.min(n - 1, ((v + half) * scale) | 0));
       return j * n + i;
     },
-    blend,
-    add,
   };
+}
+
+/**
+ * Farthest point of a fruit's height field from its centre, in radii.
+ *
+ * Sprites are padded for stems, so a third of the buffer can lie outside any
+ * possible body; probing the field once lets the render loop reject those
+ * texels before it does any object-space work for them.
+ */
+function reachOf(art) {
+  let far = 0;
+  for (let i = 0; i < 96; i++) {
+    const a = (i / 96) * Math.PI * 2;
+    const dx = Math.cos(a);
+    const dy = Math.sin(a);
+    for (let r = 1.6; r > 0; r -= 0.02) {
+      if (art.height(dx * r, dy * r) > 0) { far = Math.max(far, r); break; }
+    }
+  }
+  return far + 0.04;
 }
 
 /**
@@ -82,10 +105,14 @@ function markingGrid(art, R, d) {
  *
  *   1. object-space height field -> normal (so silhouette and shading agree)
  *   2. lambert against the fixed key light -> continuous luminance
- *   3. the fruit's own surface function picks a ramp and nudges luminance
- *   4. quantise onto the ramp, dithering *only* across each stop boundary
- *   5. bounce rim, specular blob, clipped surface markings, 1px outline
- *   6. stems and leaves, outlined separately, composited on top
+ *   3. markings nudge that luminance, in whole ramp stops
+ *   4. occlude the silhouette, then quantise onto the ramp, dithering *only*
+ *      across each stop boundary
+ *   5. hard specular, 1px outline, then stems and leaves on top
+ *
+ * Every colour on the body comes out of the fruit's one authored ramp. No
+ * blend, no glow, no second palette: a sprite that carries thirty shades is a
+ * downsampled render no matter how it was produced.
  */
 function renderFruit(tier, angle) {
   const def = FRUITS[tier];
@@ -93,12 +120,18 @@ function renderFruit(tier, angle) {
   const R = def.radius;
   const d = detailFor(R);
   const n = STOPS[d];
-  const ramps = art.stops.map((s) => pick(s, n));
+  const stops = pick(art.stops, n);
+  // Memoised on first use: neither the marking grid nor the reach varies by
+  // frame, and the grid is the most expensive thing in the whole bake.
+  if (art.surf && !art.grid) art.grid = markingGrid(art, R, d);
+  if (art.reach === undefined) art.reach = reachOf(art);
+
+  // Padding for stems and crowns keeps the size even, so the sprite's centre
+  // texel stays exactly on the physics centre at anchor 0.5.
   const size = 2 * (R + art.pad);
   const cx = size / 2 - 0.5;
   const cy = size / 2 - 0.5;
   const buf = new PixBuf(size, size);
-  const lit = new Float32Array(size * size);
 
   const ca = Math.cos(angle);
   const sa = Math.sin(angle);
@@ -108,22 +141,20 @@ function renderFruit(tier, angle) {
   // one ramp step spans about R/(n-1) texels down the terminator.
   const band = Math.min(0.45, (0.4 * DITHER_TEXELS[d] * (n - 1)) / R);
   const rimNz = Math.sqrt(Math.max(0, 1 - (1 - RIM_TEXELS[d] / R) ** 2));
+  const step = 1 / (n - 1);
   const eps = 1 / R;
   const H = art.height;
+  const grad = H.grad;
+  const g2 = [0, 0];
   const grid = art.grid;
-
-  const c = {
-    d, R,
-    proj,
-    solid: (x, y) => buf.alpha(x, y) > 0,
-    lit: (x, y) => lit[y * size + x] || 0,
-    ramp: (i) => ramps[Math.min(ramps.length - 1, i)],
-  };
+  const reach2 = art.reach * art.reach;
+  const data = buf.data;
 
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
       const dx = (px - cx) / R;
       const dy = (py - cy) / R;
+      if (dx * dx + dy * dy > reach2) continue;
       // Object space: the body's decoration spins, the key light does not.
       const u = dx * ca + dy * sa;
       const v = -dx * sa + dy * ca;
@@ -131,10 +162,13 @@ function renderFruit(tier, angle) {
       const h = H(u, v);
       if (h <= 0) continue;
 
-      let hu = (H(u + eps, v) - H(u - eps, v)) / (2 * eps);
-      let hv = (H(u, v + eps) - H(u, v - eps)) / (2 * eps);
-      hu = Math.max(-12, Math.min(12, hu));
-      hv = Math.max(-12, Math.min(12, hv));
+      if (grad) grad(u, v, h, g2);
+      else {
+        g2[0] = (H(u + eps, v) - H(u - eps, v)) / (2 * eps);
+        g2[1] = (H(u, v + eps) - H(u, v - eps)) / (2 * eps);
+      }
+      const hu = Math.max(-12, Math.min(12, g2[0]));
+      const hv = Math.max(-12, Math.min(12, g2[1]));
       const inv = 1 / Math.sqrt(1 + hu * hu + hv * hv);
       // Gradient back to screen space; the light must not rotate with the body.
       const nx = (-hu * ca + hv * sa) * inv;
@@ -142,42 +176,38 @@ function renderFruit(tier, angle) {
       const nz = inv;
 
       const ndl = nx * LIGHT[0] + ny * LIGHT[1] + nz * LIGHT[2];
-      let lum = AMBIENT + Math.max(0, ndl) ** 0.85 * (1 - AMBIENT);
+      const key = ndl > 0 ? AMBIENT + KEY_CURVE[(ndl * 256) | 0] * (1 - AMBIENT) : AMBIENT;
+      let lum = key;
 
-      // Markings pick a ramp; a fractional blend is resolved with the same
-      // ordered dither the ramp stops use, in screen space, so a blush edge is
-      // a narrow ribbon of noise rather than a hard polygon boundary.
-      let rampIdx = 0;
-      if (grid) {
-        const g = grid.at(u, v);
-        lum += grid.add[g];
-        const b = grid.blend[g];
-        const lo = b | 0;
-        const f = b - lo;
-        rampIdx = f > 0 && f > bayer(px, py) ? lo + 1 : lo;
+      // Markings, in ramp stops. Scaling by the local key light keeps texture
+      // contrast highest where the light is: constant-contrast markings make
+      // the shadow side busier than the lit side, which inverts the form.
+      if (grid) lum += grid.off[grid.at(u, v)] * step * (0.4 + 0.6 * key);
+
+      // Occlude toward the silhouette, hardest on the shadow side. A fruit
+      // whose brightest stop runs to its own edge reads as a sticker, and
+      // where two of them touch the crevice comes out brighter than either.
+      if (nz < rimNz) {
+        const e = 1 - nz / rimNz;
+        const away = Math.max(0, Math.min(1, (0.3 - ndl) / 0.55));
+        lum -= step * e * (0.6 + 1.5 * away);
       }
 
-      lit[py * size + px] = lum;
-      const idx = quantIndex(lum, n, px, py, band);
-      let col = ramps[Math.min(ramps.length - 1, rampIdx)][idx];
-
-      // Cool bounce along the shadow edge: without it a dark fruit dissolves
-      // into the dark jar, and a flat dark edge is what kills the roundness.
-      if (nz < rimNz && ndl < 0.3 && nx * BOUNCE[0] + ny * BOUNCE[1] > 0.4) {
-        col = art.bounce;
-      }
-
-      buf.set(px, py, col, 255);
+      const col = stops[quantIndex(lum, n, px, py, band)];
+      const o = (py * size + px) * 4;
+      data[o] = col[0];
+      data[o + 1] = col[1];
+      data[o + 2] = col[2];
+      data[o + 3] = 255;
     }
   }
 
   specular(buf, art, R, cx, cy, d);
-  if (art.surface) art.surface(buf, c);
   buf.outline(art.outline);
 
   if (art.parts) {
     const ov = new PixBuf(size, size);
-    art.parts(ov, c);
+    art.parts(ov, { d, R, proj });
     ov.outline(art.partOutline);
     buf.blit(ov);
   }
@@ -185,28 +215,24 @@ function renderFruit(tier, angle) {
 }
 
 /**
- * A hard specular blob, fixed in screen space.
+ * The specular: a solid core plus one ordered-dithered ring, both in the same
+ * single highlight colour.
  *
- * Blending a soft white gaussian is the other half of the downsampled-render
- * look; this is a solid core with a single dithered fringe, sized by bracket.
+ * Blending a soft falloff toward white is the other half of the downsampled
+ * render look — it spends five or six shades on one small feature and none of
+ * them are in the ramp.
  */
 function specular(buf, art, R, cx, cy, d) {
   const hx = cx + LIGHT[0] * R * 0.52;
   const hy = cy + LIGHT[1] * R * 0.52;
-  const core = Math.max(0.7, R * 0.13);
-  const fringe = core + (d >= 2 ? 1.8 : 0.9);
-  const x0 = Math.floor(hx - fringe);
-  const x1 = Math.ceil(hx + fringe);
-  const y0 = Math.floor(hy - fringe);
-  const y1 = Math.ceil(hy + fringe);
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
+  const core = Math.max(0.7, R * 0.12);
+  const fringe = core + (d >= 2 ? 1.6 : 0.8);
+  for (let y = Math.floor(hy - fringe); y <= Math.ceil(hy + fringe); y++) {
+    for (let x = Math.floor(hx - fringe); x <= Math.ceil(hx + fringe); x++) {
       if (buf.alpha(x, y) === 0) continue;
       const dist = Math.hypot(x - hx, y - hy);
-      if (dist <= core) {
+      if (dist <= core || (dist <= fringe && bayer(x, y) < 0.4)) {
         buf.set(x, y, art.hi, 255);
-      } else if (dist <= fringe && bayer(x, y) < 0.45) {
-        buf.set(x, y, mix(buf.get(x, y), art.hi, 0.55), 255);
       }
     }
   }
@@ -216,12 +242,10 @@ function specular(buf, art, R, cx, cy, d) {
  * Bake every fruit at every rotation into GPU textures.
  * Returns { frames: Texture[][] } indexed [tier][frame].
  */
+
 export function bakeFruitTextures() {
   const frames = [];
   for (let tier = 0; tier < FRUITS.length; tier++) {
-    const art = FRUIT_ART[tier];
-    const R = FRUITS[tier].radius;
-    if (art.surf && !art.grid) art.grid = markingGrid(art, R, detailFor(R));
     const row = [];
     for (let f = 0; f < ROT_FRAMES; f++) {
       const angle = (f / ROT_FRAMES) * Math.PI * 2;
