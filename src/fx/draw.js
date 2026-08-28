@@ -8,7 +8,7 @@ import { ramp, toHex, mix, hex, BAYER4 } from '../art/palette.js';
  * Everything here emits axis-aligned integer rectangles. Pixi's circle/arc
  * primitives tessellate to triangles and land on fractional coordinates, which
  * produces the soft, half-lit edge texels that instantly read as "modern
- * engine glow" instead of pixel art — so rings are scan-converted by
+ * engine glow" instead of pixel art — so rings and discs are scan-converted by
  * hand into whole-texel spans instead.
  */
 
@@ -19,6 +19,20 @@ const ALPHA_STEPS = 5;
 export function quantAlpha(a) {
   if (a <= 0) return 0;
   return Math.min(1, Math.ceil(Math.min(1, a) * ALPHA_STEPS) / ALPHA_STEPS);
+}
+
+/** Filled pixel disc, one rect per scanline. */
+export function disc(g, cx, cy, r, colour, alpha = 1) {
+  const a = quantAlpha(alpha);
+  if (a <= 0 || r < 0.5) return;
+  const R = Math.round(r);
+  const x0 = Math.round(cx);
+  const y0 = Math.round(cy);
+  for (let y = -R; y <= R; y++) {
+    const w = Math.round(Math.sqrt(Math.max(0, R * R - y * y)));
+    if (w <= 0) continue;
+    g.rect(x0 - w, y0 + y, w * 2 + 1, 1).fill({ color: colour, alpha: a });
+  }
 }
 
 /**

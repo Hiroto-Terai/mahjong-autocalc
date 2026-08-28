@@ -3,7 +3,7 @@ import { VIRTUAL_W, BOARD, FRUITS } from '../config.js';
 import { Particles } from './particles.js';
 import { makeText, tintText } from './pixfont.js';
 import { ScreenFx } from './screen.js';
-import { ring, beadRing, spike, quantAlpha, paletteFor, DITHER_LEVELS } from './draw.js';
+import { disc, ring, beadRing, spike, quantAlpha, paletteFor, DITHER_LEVELS } from './draw.js';
 
 /** Jar dust: cool neutrals, deliberately *not* fruit-coloured, so the player
  *  can tell a collision from a merge out of the corner of their eye. */
@@ -67,6 +67,7 @@ export class Fx {
 
     this.rings = [];
     this.spikes = [];
+    this.flashes = [];
     this.ghosts = [];
     this.popups = [];
     this.shakes = [];
@@ -90,6 +91,7 @@ export class Fx {
     this.parts.clear();
     this.rings.length = 0;
     this.spikes.length = 0;
+    this.flashes.length = 0;
     this.shakes.length = 0;
     this.timers.length = 0;
     this.impactQueue.length = 0;
@@ -124,10 +126,10 @@ export class Fx {
 
   addRing({
     x, y, r0, r1, life, thick0 = 3, thick1 = 1, colour, edge,
-    delay = 0, bead = false, white = false,
+    delay = 0, bead = false, lead = null,
   }) {
     this._budget(this.rings, 5);
-    this.rings.push({ x, y, r0, r1, life, thick0, thick1, colour, edge, age: -delay, bead, white });
+    this.rings.push({ x, y, r0, r1, life, thick0, thick1, colour, edge, age: -delay, bead, lead });
   }
 
   addSpikes({ x, y, count, from, to, w0, w1 = 1, life, colour, spin = 0, delay = 0, alt = 1 }) {
@@ -195,7 +197,7 @@ export class Fx {
     let h = 0;
     let w = 0;
     for (const l of lines) {
-      const t = makeText(l.text, { fill: l.fill, outline: l.outline ?? 0x1b0f26 });
+      const t = makeText(l.text, { fill: l.fill, outline: l.outline ?? 0x1b0f26, face: l.face });
       t.scale.set(l.scale);
       const lw = t.fxWidth * l.scale;
       t.y = h;
@@ -253,44 +255,55 @@ export class Fx {
     const pal = paletteFor(parentTier);
     const npal = paletteFor(tier);
     // A cherry pair should register as a tick, a melon pair as an event.
-    const power = 0.3 + (tier / (FRUITS.length - 1)) * 1.0;
+    // Superlinear on purpose: linear scaling makes every merge feel the same
+    // size because the fruit it sits on grew linearly too.
+    const power = 0.22 + 1.25 * (tier / (FRUITS.length - 1)) ** 1.3;
     const heat = clamp(1 + (combo - 1) * 0.14, 1, 1.8);
 
     this._ageOutBursts();
 
-    // Rim light: a thin band right on the new silhouette, so the fruit itself
-    // appears to ignite. A fat annulus here just reads as a vector halo and
-    // hides the very sprite the burst exists to announce.
+    // The new fruit itself blows out. Nothing else in the burst says "this
+    // object was just created" as directly as the object going white, and it
+    // is the one mark that cannot be mistaken for the fruit already there.
+    this.flashes.push({
+      rec, x, y, r: R, age: 0,
+      life: 90 + 90 * power, colour: npal.hot,
+    });
+
+    // Shockwave: a solid wall with a near-white leading edge. Beads and 1px
+    // outlines read as a debug gizmo at this size; the ring has to have body.
     this.addRing({
       x, y,
-      r0: R + 2, r1: R + 7,
-      thick0: tier >= 6 ? 4 : 3, thick1: 2,
-      life: 90 + 60 * power, colour: npal.hot, edge: npal.light,
-      bead: true, white: true,
+      r0: R * 1.05, r1: R * 1.05 + 24 + power * 78,
+      life: 230 + 220 * power,
+      thick0: 3 + Math.round(power * 6), thick1: 2,
+      colour: npal.light, edge: pal.shadow, lead: 0xffffff,
     });
+    // A second wave for anything past a grape, delayed so the two read as a
+    // sequence rather than a thick band.
+    if (tier >= 3) {
+      this.addRing({
+        x, y,
+        r0: R * 1.3, r1: R * 1.3 + 40 + power * 96,
+        life: 280 + 260 * power,
+        thick0: 3 + Math.round(power * 3), thick1: 2, delay: 70,
+        colour: pal.light, edge: pal.shadow, lead: npal.hot,
+      });
+    }
 
-    // The starburst is the burst. Everything else is support.
+    // The starburst reaches well past both rings, so the burst has a spiky
+    // silhouette instead of a set of concentric circles.
     this.addSpikes({
-      x, y, count: tier >= 5 ? 10 : 8,
-      from: Math.round(R * 0.8), to: Math.round(R * 2.4 + 16 + power * 30),
-      w0: tier >= 6 ? 5 : tier >= 2 ? 4 : 3, w1: 1,
-      life: 130 + 80 * power, colour: 0xffffff, spin: (tier % 2) * 0.32, alt: 0.5,
+      x, y, count: tier >= 5 ? 12 : 8,
+      from: Math.round(R * 0.8), to: Math.round(R * 1.6 + 34 + power * 74),
+      w0: 3 + Math.round(power * 5), w1: 1,
+      life: 170 + 130 * power, colour: 0xffffff, spin: (tier % 2) * 0.32, alt: 0.5,
     });
-    // A second, sparser set of long rays over the short ones. Matching the
-    // first set's count just thickens the star into a cog.
     this.addSpikes({
       x, y, count: 4,
-      from: Math.round(R * 0.9), to: Math.round(Math.min(R * 2.9 + 18 + power * 34, R + 108)),
-      w0: tier >= 6 ? 4 : 3, w1: 1, delay: 30,
-      life: 160 + 90 * power, colour: npal.hot, spin: (tier % 2) * 0.32 + 0.39, alt: 1,
-    });
-
-    // Exactly one ring, and it is chunky: the circle motif earns its place
-    // once, as the shockwave leaving the impact.
-    this.addRing({
-      x, y, r0: R * 1.25, r1: R * 2.1 + 16 + power * 26, life: 210 + 170 * power,
-      thick0: tier >= 5 ? 3 : 2, thick1: 2, colour: pal.light, edge: pal.shadow,
-      delay: 30, bead: true,
+      from: Math.round(R * 0.9), to: Math.round(R * 1.6 + 60 + power * 104),
+      w0: 3 + Math.round(power * 4), w1: 1, delay: 40,
+      life: 210 + 150 * power, colour: npal.hot, spin: (tier % 2) * 0.32 + 0.39, alt: 1,
     });
 
     // The two parents visibly implode. They are already gone from physics, so
@@ -319,8 +332,8 @@ export class Fx {
     // Debris in the parents' own ramp — this is the burst's identity. It
     // launches from the rim at high speed and is braked hard: the eye needs the
     // chunks a long way out within two frames, then wants them to hang.
-    const n = Math.round((16 + tier * 5.2) * heat);
-    const base = 420 + power * 380;
+    const n = Math.round((22 + tier * 8) * heat);
+    const base = 440 + power * 460;
     for (let i = 0; i < n; i++) {
       const a = (i / n) * TAU + Math.random() * 0.6;
       const sp = base * (0.5 + Math.random() * 0.8);
@@ -332,7 +345,8 @@ export class Fx {
         // Biased upward, hard. A merge deep in the pile throws half its debris
         // into fruit that swallows it; the visible half is the half that flies.
         vy: Math.sin(a) * sp * 0.8 - 120 * power,
-        size: roll < 0.3 ? (tier >= 6 ? 4 : 3) : roll < 0.75 ? 2 : 1,
+        size: roll < 0.34 ? (tier >= 6 ? 5 : tier >= 3 ? 4 : 3)
+          : roll < 0.8 ? (tier >= 6 ? 3 : 2) : 1,
         // Skip the darkest stop: shadow-coloured chunks vanish into the jar.
         // Every fourth chunk comes from a marking ramp where the fruit has one
         // — a watermelon burst that throws only rind-green is half the fruit.
@@ -346,7 +360,7 @@ export class Fx {
       });
     }
     // A handful of blinking hot texels sell the flash without a glow sprite.
-    for (let i = 0; i < 3 + tier; i++) {
+    for (let i = 0; i < 4 + tier * 2; i++) {
       const a = Math.random() * TAU;
       const d = R * (1.0 + Math.random() * 0.7);
       this.parts.spawn({
@@ -389,32 +403,37 @@ export class Fx {
   scorePopup({ tier, x, y, R, gained, combo, isNew, npal }) {
     const depth = clamp(combo - 1, 0, COMBO_TINTS.length - 1);
     const tint = COMBO_TINTS[depth];
-    // The score is the primary feedback for the merge the player just made,
-    // and most merges happen buried in the pile — it has to be big enough to
-    // find at a glance against a board full of fruit.
-    const scale = tier >= 3 || combo >= 3 ? 3 : tier >= 1 ? 2 : 1;
+    // The two faces are the hierarchy; the integer scale is only the last
+    // step of it. A cherry's score in the display cut would shout as loudly as
+    // a melon's, which is the distinction the whole burst is built on.
+    const big = tier >= 6 || combo >= 4;
+    const face = tier >= 2 || combo >= 2 ? 'display' : 'small';
+    const scale = big ? 2 : 1;
 
     // The final tier owns the banner line, so its score hangs below the fruit
     // instead of climbing into it.
-    const top = tier === FRUITS.length - 1;
+    const under = tier === FRUITS.length - 1;
     const lines = [];
-    // The top tier gets a full-screen banner instead; both at once collide.
-    const badge = isNew && tier > 0 && tier < FRUITS.length - 1;
-    if (badge) lines.push({ text: 'NEW', scale: 2, fill: 0xffe27a, outline: 0x3a2000 });
-    if (combo >= 2) lines.push({ text: `X${combo}`, scale: scale + 1, fill: tint, outline: 0x2a0c18 });
-    lines.push({ text: `+${gained}`, scale, fill: tint });
+    // Discovery gets its own badge, except on the top tier where the banner
+    // already says it and the two would collide.
+    const badge = isNew && tier > 0 && !under;
+    if (badge) lines.push({ text: 'NEW', face: 'small', scale, fill: 0xffe27a, outline: 0x3a2000 });
+    if (combo >= 2) {
+      lines.push({ text: `X${combo}`, face: 'display', scale: scale + 1, fill: tint, outline: 0x2a0c18 });
+    }
+    lines.push({ text: `+${gained}`, face, scale, fill: tint });
 
-    this.popup(lines, x, top ? y + R + 30 : y - R - 9, {
-      rise: top ? 12 : 20 + scale * 6,
-      life: 640 + scale * 90 + (combo >= 2 ? 140 : 0),
+    this.popup(lines, x, under ? y + R + 34 : y - R - 10, {
+      rise: under ? 12 : 22 + scale * 8,
+      life: 660 + scale * 120 + (combo >= 2 ? 140 : 0),
       punch: 60 + depth * 20,
     });
 
     if (combo >= 2) {
       // Chains earn their own ring so the escalation is visible, not just read.
       this.addRing({
-        x, y, r0: R * 1.15, r1: R * (2.1 + depth * 0.45), life: 230 + depth * 40,
-        thick0: 2, thick1: 2, colour: tint, edge: 0x3a1020, delay: 40, bead: true,
+        x, y, r0: R * 1.15, r1: R * 1.15 + 34 + depth * 18, life: 250 + depth * 40,
+        thick0: 3, thick1: 2, colour: tint, edge: 0x3a1020, lead: 0xffffff, delay: 50,
       });
     }
 
@@ -481,9 +500,9 @@ export class Fx {
     }
 
     this.after(160, () => {
-      const text = makeText('WATERMELON', { fill: 0xfff6d0, outline: 0x2a0a12 });
-      text.scale.set(3);
-      text.x = Math.round((VIRTUAL_W - text.fxWidth * 3) / 2);
+      const text = makeText('WATERMELON', { fill: 0xfff6d0, outline: 0x2a0a12, face: 'display' });
+      text.scale.set(2);
+      text.x = Math.round((VIRTUAL_W - text.fxWidth * 2) / 2);
       text.y = BANNER_Y;
       this.banner.addChild(text);
       this.bannerLife = { box: text, age: 0, life: 2000 };
@@ -528,6 +547,7 @@ export class Fx {
 
     const g = this.gfx;
     g.clear();
+    this._flashes(dt, g);
     this._rings(dt, g);
     this._spikes(dt, g);
 
@@ -663,6 +683,31 @@ export class Fx {
     }
   }
 
+  /**
+   * The white-out on a freshly merged fruit.
+   *
+   * It tracks the record rather than the merge point, because the new fruit is
+   * launched upward on the same frame and a flash left behind at the old
+   * position reads as a separate object. Stepping the radius down as it fades
+   * uncovers the sprite from the outside in, so the fruit appears to cool.
+   */
+  _flashes(dt, g) {
+    for (let i = this.flashes.length - 1; i >= 0; i--) {
+      const f = this.flashes[i];
+      f.age += dt;
+      const t = f.age / f.life;
+      if (t >= 1) { this.flashes.splice(i, 1); continue; }
+      const pos = f.rec?.body?.position;
+      if (pos) { f.x = pos.x; f.y = pos.y; }
+      const r = f.r * (1 + 0.12 * (1 - t)) - Math.round(t * f.r * 0.55);
+      // Solid white for the first two frames, then the fruit's hot stop, then
+      // only a rim. Holding white any longer starts to hide the new fruit.
+      if (t < 0.2) disc(g, f.x, f.y, r + 1, 0xffffff, 1);
+      else if (t < 0.45) disc(g, f.x, f.y, r, f.colour, 1 - (t - 0.2) * 1.4);
+      ring(g, f.x, f.y, r + 2, r, 0xffffff, 1 - t);
+    }
+  }
+
   _rings(dt, g) {
     for (let i = this.rings.length - 1; i >= 0; i--) {
       const r = this.rings[i];
@@ -674,20 +719,18 @@ export class Fx {
       const rad = r.r0 + (r.r1 - r.r0) * e;
       const a = t < 0.5 ? 1 : 1 - (t - 0.5) / 0.5;
       const thick = Math.max(1, Math.round(r.thick0 + (r.thick1 - r.thick0) * e));
-      // White for the first instant, then the fruit's own hot stop: the eye
-      // reads the colour change as the flash cooling.
-      const colour = r.white && t < 0.12 ? 0xffffff : r.colour;
       if (r.bead) {
         beadRing(g, r.x, r.y, rad, INK, a, thick + 2);
-        beadRing(g, r.x, r.y, rad, colour, a, thick);
+        beadRing(g, r.x, r.y, rad, r.colour, a, thick);
         continue;
       }
       ring(g, r.x, r.y, rad + 1, rad - thick - 1, INK, a);
-      ring(g, r.x, r.y, rad, rad - thick, colour, a);
-      // Rimming the band only pays once it is wide enough to survive it; on a
-      // thin ring the darker edge simply eats the lit core.
-      if (thick >= 4) {
-        ring(g, r.x, r.y, rad, rad - 1, r.edge, a);
+      ring(g, r.x, r.y, rad, rad - thick, r.colour, a);
+      // A hot leading edge is what separates an expanding wall of energy from
+      // an outlined circle: the front two texels stay near-white while the
+      // body behind them cools to the fruit's own hue.
+      if (r.lead !== null && thick >= 3) {
+        ring(g, r.x, r.y, rad, rad - Math.min(2, thick - 1), r.lead, a);
         ring(g, r.x, r.y, rad - thick + 1, rad - thick, r.edge, a);
       }
     }

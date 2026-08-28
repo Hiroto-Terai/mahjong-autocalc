@@ -10,7 +10,7 @@ import { quantAlpha } from './draw.js';
  * allocation spike is visible as a hitch at 60fps.
  */
 export class Particles {
-  constructor(parent, limit = 200) {
+  constructor(parent, limit = 380) {
     this.container = new Container();
     parent.addChild(this.container);
     this.live = [];

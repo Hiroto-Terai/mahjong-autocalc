@@ -4,3 +4,7 @@ shots/
 shots-*/
 .DS_Store
 dist-*/
+
+# Agent scratch probes at the repo root; the real harnesses live in tools/
+/probe*.mjs
+/dbg.mjs

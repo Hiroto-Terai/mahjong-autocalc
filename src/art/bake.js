@@ -29,6 +29,54 @@ const DITHER_TEXELS = [0, 1.6, 2.2, 2.6, 3.0];
 /** Thickness of the bounce rim along the shadow edge, in texels. */
 const RIM_TEXELS = [1, 1, 1.5, 2, 2];
 
+/** Object-space extent the marking grid covers, and its cells per texel. */
+const GRID_SPAN = 2.3;
+const GRID_DENSITY = 2;
+
+/**
+ * Evaluate a fruit's surface markings once into an object-space grid.
+ *
+ * Markings are a pure function of object space — that is the whole point of
+ * sampling them there — so paying for asin, Voronoi and lattice maths on every
+ * texel of all 24 rotations is 24x more work than the answer needs. Two cells
+ * per texel keeps a stripe edge inside half a texel of where it belongs.
+ */
+function markingGrid(art, R, d) {
+  const n = Math.max(24, Math.round(GRID_SPAN * R * GRID_DENSITY));
+  const blend = new Float32Array(n * n);
+  const add = new Float32Array(n * n);
+  const c = { d, R, u: 0, v: 0, lon: 0, lat: 0, uw: 0, vw: 0, add: 0 };
+  for (let j = 0; j < n; j++) {
+    const v = -GRID_SPAN / 2 + (GRID_SPAN * (j + 0.5)) / n;
+    for (let i = 0; i < n; i++) {
+      const u = -GRID_SPAN / 2 + (GRID_SPAN * (i + 0.5)) / n;
+      const cosLat = Math.sqrt(Math.max(0, 1 - v * v));
+      c.u = u; c.v = v; c.add = 0;
+      c.lat = Math.asin(Math.max(-1, Math.min(1, v)));
+      c.lon = Math.asin(Math.max(-1, Math.min(1, u / Math.max(cosLat, 1e-3))));
+      // Sphere-warped coordinates: markings compress toward the silhouette
+      // like a real surface curving away, instead of sliding off flat.
+      const rr = Math.hypot(u, v);
+      const w = rr > 1e-4 ? Math.asin(Math.min(1, rr)) / (rr * Math.PI * 0.5) : 0.6366;
+      c.uw = u * w; c.vw = v * w;
+      const k = j * n + i;
+      blend[k] = art.surf(c);
+      add[k] = c.add;
+    }
+  }
+  const scale = n / GRID_SPAN;
+  const half = GRID_SPAN / 2;
+  return {
+    at(u, v) {
+      const i = Math.max(0, Math.min(n - 1, ((u + half) * scale) | 0));
+      const j = Math.max(0, Math.min(n - 1, ((v + half) * scale) | 0));
+      return j * n + i;
+    },
+    blend,
+    add,
+  };
+}
+
 /**
  * Render one fruit at one rotation into a PixBuf.
  *
@@ -62,10 +110,10 @@ function renderFruit(tier, angle) {
   const rimNz = Math.sqrt(Math.max(0, 1 - (1 - RIM_TEXELS[d] / R) ** 2));
   const eps = 1 / R;
   const H = art.height;
-  const surf = art.surf;
+  const grid = art.grid;
 
   const c = {
-    d, R, u: 0, v: 0, px: 0, py: 0, lon: 0, lat: 0, uw: 0, vw: 0, add: 0,
+    d, R,
     proj,
     solid: (x, y) => buf.alpha(x, y) > 0,
     lit: (x, y) => lit[y * size + x] || 0,
@@ -96,19 +144,17 @@ function renderFruit(tier, angle) {
       const ndl = nx * LIGHT[0] + ny * LIGHT[1] + nz * LIGHT[2];
       let lum = AMBIENT + Math.max(0, ndl) ** 0.85 * (1 - AMBIENT);
 
+      // Markings pick a ramp; a fractional blend is resolved with the same
+      // ordered dither the ramp stops use, in screen space, so a blush edge is
+      // a narrow ribbon of noise rather than a hard polygon boundary.
       let rampIdx = 0;
-      if (surf) {
-        c.u = u; c.v = v; c.px = px; c.py = py; c.add = 0;
-        const cosLat = Math.sqrt(Math.max(0, 1 - v * v));
-        c.lat = Math.asin(Math.max(-1, Math.min(1, v)));
-        c.lon = Math.asin(Math.max(-1, Math.min(1, u / Math.max(cosLat, 1e-3))));
-        // Sphere-warped coordinates: markings compress toward the silhouette
-        // like a real surface curving away, instead of sliding off flat.
-        const rr = Math.hypot(u, v);
-        const w = rr > 1e-4 ? Math.asin(Math.min(1, rr)) / (rr * Math.PI * 0.5) : 0.6366;
-        c.uw = u * w; c.vw = v * w;
-        rampIdx = surf(c) | 0;
-        lum += c.add;
+      if (grid) {
+        const g = grid.at(u, v);
+        lum += grid.add[g];
+        const b = grid.blend[g];
+        const lo = b | 0;
+        const f = b - lo;
+        rampIdx = f > 0 && f > bayer(px, py) ? lo + 1 : lo;
       }
 
       lit[py * size + px] = lum;
@@ -173,6 +219,9 @@ function specular(buf, art, R, cx, cy, d) {
 export function bakeFruitTextures() {
   const frames = [];
   for (let tier = 0; tier < FRUITS.length; tier++) {
+    const art = FRUIT_ART[tier];
+    const R = FRUITS[tier].radius;
+    if (art.surf && !art.grid) art.grid = markingGrid(art, R, detailFor(R));
     const row = [];
     for (let f = 0; f < ROT_FRAMES; f++) {
       const angle = (f / ROT_FRAMES) * Math.PI * 2;
