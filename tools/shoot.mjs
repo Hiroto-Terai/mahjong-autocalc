@@ -122,16 +122,28 @@ try {
         }
 
         if (scenario.forceMerge) {
-          // Drop a duplicate of the current fruit onto a matching resting one
-          // so the capture lands mid-burst.
-          const target = [...game.physics.fruits.values()]
-            .filter((f) => f.tier === game.current)
-            .sort((a, b) => a.body.position.y - b.body.position.y)[0];
-          if (target) {
-            G.dropAt(target.body.position.x);
-            G.advance(900);
-          }
-          G.advance(scenario.fxDelay || 90);
+          // Spawn a twin directly above a resting fruit rather than waiting
+          // for the claw to offer a matching tier: the claw's tier comes from
+          // the seeded RNG, so any change upstream silently turned this
+          // capture into a shot of nothing happening.
+          const resting = [...game.physics.fruits.values()]
+            .filter((f) => f.landed)
+            .sort((a, b) => a.body.position.y - b.body.position.y);
+          const target = resting.find((f) => f.tier >= 2) || resting[0];
+          if (!target) throw new Error('forceMerge: no resting fruit to merge with');
+
+          let merged = false;
+          G.events.on('merge', () => { merged = true; });
+          game.physics.spawn(
+            target.tier,
+            target.body.position.x,
+            target.body.position.y - target.radius * 2 - 4);
+
+          // Advance until the merge actually fires, so the capture samples a
+          // real burst rather than a fixed guess at when one might occur.
+          for (let i = 0; i < 400 && !merged; i++) G.advance(8);
+          if (!merged) throw new Error('forceMerge: fruit never merged');
+          G.advanceFx(scenario.fxDelay || 90);
         }
         G.renderOnce();
       }, { ...sc, radii: [8, 10, 13, 16, 20, 24, 29, 34, 39, 44, 50] });
