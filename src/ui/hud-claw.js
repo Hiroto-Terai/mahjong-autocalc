@@ -3,6 +3,9 @@ import { VIRTUAL_W, BOARD, DROP, FRUITS } from '../config.js';
 import { THEME } from './hud-theme.js';
 import { px, dashV, markerDown } from './panel-frame.js';
 
+/** Texels below BOARD.top where the rim art stops occluding the interior. */
+const GUIDE_RIM_CLEARANCE = 14;
+
 /** Rail rows. The gantry hangs just under the HUD deck. */
 const RAIL_Y = 30;
 const RAIL_H = 5;
@@ -135,13 +138,19 @@ export class Claw {
     g.clear();
     if (!live) return;
 
-    const top = DROP.y + r + 4;
+    // Start below the jar's rim art. The guide sits on the fruit layer, above
+    // the back of the rim, so a line begun at the claw draws straight across
+    // the vessel's most prominent structure and visibly breaks it.
+    const top = Math.max(DROP.y + r + 4, BOARD.top + GUIDE_RIM_CLEARANCE);
     const floor = BOARD.floor - 1;
-    dashV(g, cx, top, floor - 3, { on: 4, off: 4, colour: THEME.gold, alpha: 0.6, fade: 0.55 });
+    // No per-dash alpha fade: a fade makes an even 4-on/4-off rhythm read as
+    // irregular dashes, which is worse than a shorter line at one weight.
+    dashV(g, cx, top, floor - 3, { on: 4, off: 4, colour: THEME.gold, alpha: 0.5 });
     // Width whiskers: the fruit's true footprint, so a tight gap can be judged
-    // before committing rather than after.
+    // before committing rather than after. Drawn as solid 2px ticks — at one
+    // texel on and five off they read as stray pixels, not as a measurement.
     for (const s of [-1, 1]) {
-      dashV(g, cx + s * r, top + 6, top + 46, { on: 1, off: 5, colour: THEME.gold, alpha: 0.3, fade: 1 });
+      px(g, cx + s * r, top, 1, 5, THEME.gold, 0.34);
     }
     // Landing bracket on the floor.
     px(g, cx - r, floor - 1, r * 2 + 1, 1, THEME.gold, 0.16);
