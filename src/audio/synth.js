@@ -13,6 +13,9 @@ import {
 
 const SILENT = 0.0001;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+/** No AudioParam may be scheduled in the past; voices with a pre-roll would
+ *  otherwise throw for the first sound after the context is created. */
+const at = (ctx, t) => (t > ctx.currentTime ? t : ctx.currentTime);
 
 /** One shared noise table per context; regenerating it per burst is the kind
  *  of hidden cost that shows up as a hitch during a busy pile-up. */
@@ -41,6 +44,7 @@ function ping(ctx, bus, t, {
   freq, amp, decay, type = 'sine', send = 0, attack = 0.004, bend = 1, bendTime = 0.03, detune = 0,
 }) {
   if (amp <= 0 || freq <= 0) return;
+  t = at(ctx, t);
   const o = ctx.createOscillator();
   o.type = type;
   o.detune.value = detune;
@@ -61,6 +65,7 @@ function noise(ctx, bus, t, {
   dur, amp, type = 'bandpass', freq, freqEnd = null, q = 1, send = 0, attack = 0.002, playback = 1,
 }) {
   if (amp <= 0) return;
+  t = at(ctx, t);
   const src = ctx.createBufferSource();
   src.buffer = noiseBuffer(ctx);
   src.playbackRate.value = playback;
@@ -130,7 +135,7 @@ export function renderMerge(ctx, bus, t, { tier = 0, combo = 1, isNew = false, l
   for (const p of PARTIALS) {
     // A partial up here is inaudible on every speaker a browser game reaches;
     // scheduling it only costs voices during a pile-up.
-    if (f * p.r > 15000) continue;
+    if (f * p.r > 11000) continue;
     // Small fruit keep their upper partials (bright, light); the watermelon
     // sheds them so what is left is fundamental and body.
     const tilt = p.r === 1 ? 1 : 1 - big * 0.35;
@@ -326,9 +331,15 @@ export function createDangerBed(ctx, bus, t) {
  * Watermelon fanfare.
  * ------------------------------------------------------------------ */
 
-export function renderWatermelon(ctx, bus, t) {
+/** Length of the upbeat the fanfare needs before its downbeat. */
+const FANFARE_PREROLL = 0.18;
+
+export function renderWatermelon(ctx, bus, when) {
+  // Shift the whole figure rather than clipping the riser: an upbeat that
+  // gets truncated to nothing turns the arrival into a cold start.
+  const t = Math.max(when, ctx.currentTime + FANFARE_PREROLL);
   // Riser into the downbeat, so the fanfare arrives rather than starts.
-  noise(ctx, bus, t - 0.18, {
+  noise(ctx, bus, t - FANFARE_PREROLL, {
     dur: 0.2, amp: 0.05, freq: 400, freqEnd: 4200, q: 1.4, attack: 0.12, send: 0.3,
   });
 
@@ -351,8 +362,8 @@ export function renderWatermelon(ctx, bus, t) {
   noise(ctx, bus, hit, { dur: 0.05, amp: 0.14, freq: 3000, freqEnd: 700, q: 0.8, attack: 0.001, send: 0.3 });
   // Two shimmering octaves above the chord, entering late and outlasting the
   // root: they are what keeps the tail of the fanfare bright.
-  ping(ctx, bus, hit + 0.10, { freq: semiHz(36), amp: 0.075, decay: 1.7, send: 0.6 });
-  ping(ctx, bus, hit + 0.20, { freq: semiHz(43), amp: 0.055, decay: 1.5, send: 0.7 });
+  ping(ctx, bus, hit + 0.10, { freq: semiHz(36), amp: 0.10, decay: 2.2, send: 0.6 });
+  ping(ctx, bus, hit + 0.20, { freq: semiHz(43), amp: 0.075, decay: 2.0, send: 0.7 });
 }
 
 /* ------------------------------------------------------------------ *

@@ -84,42 +84,39 @@ function spectrum(x, sr) {
   };
 }
 
-/** Dominant frequency every `hop` seconds, for frames loud enough to matter.
- *  This is how a claim like "the cadence descends" becomes a number. */
-function pitchTrack(x, sr, hop = 0.12) {
+/**
+ * The dominant frequency of the note that starts at `t`.
+ *
+ * Sampling a fixed hop grid instead — which is what this used to do — is not a
+ * pitch measurement: a note longer than the hop is reported two or three
+ * times, and the reported bin drifts by +/-1 as the partials decay at
+ * different rates. Both artefacts read as "flat" or "descending" in a run that
+ * is in fact a clean ascent. So: one window per note onset, and a parabolic
+ * fit across the peak bin so the answer is not quantised to 21.5Hz.
+ */
+function noteHz(x, sr, t) {
   const N = 2048;
+  const off = Math.floor((t + 0.006) * sr);
+  if (off + N > x.length) return 0;
   const win = new Float64Array(N);
   for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1));
-  const step = Math.floor(hop * sr);
-  const out = [];
-  for (let off = 0; off + N <= x.length; off += step) {
-    let e = 0;
-    for (let i = 0; i < N; i++) e += x[off + i] * x[off + i];
-    if (Math.sqrt(e / N) < 3e-3) continue;
-    const re = new Float64Array(N), im = new Float64Array(N);
-    for (let i = 0; i < N; i++) re[i] = x[off + i] * win[i];
-    fft(re, im);
-    let best = 0, bestMag = 0;
-    for (let k = 2; k < N / 2; k++) {
-      const mag = Math.hypot(re[k], im[k]);
-      if (mag > bestMag) { bestMag = mag; best = (k * sr) / N; }
-    }
-    out.push(Math.round(best));
-  }
-  return out;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let i = 0; i < N; i++) re[i] = x[off + i] * win[i];
+  fft(re, im);
+  const mag = new Float64Array(N / 2);
+  for (let k = 0; k < N / 2; k++) mag[k] = Math.hypot(re[k], im[k]);
+  let k0 = 2;
+  for (let k = 2; k < N / 2 - 1; k++) if (mag[k] > mag[k0]) k0 = k;
+  const den = mag[k0 - 1] - 2 * mag[k0] + mag[k0 + 1];
+  const d = den ? 0.5 * (mag[k0 - 1] - mag[k0 + 1]) / den : 0;
+  return ((k0 + d) * sr) / N;
 }
 
-/** Fraction of adjacent pairs moving in `dir`, ignoring repeats. */
-function trend(track, dir) {
-  let moves = 0, agree = 0;
-  for (let i = 1; i < track.length; i++) {
-    const d = Math.sign(track[i] - track[i - 1]);
-    if (!d) continue;
-    moves++;
-    if (d === dir) agree++;
-  }
-  return moves ? agree / moves : 0;
-}
+/** Semitones above A2. Two readings inside a quarter-tone are the same note,
+ *  which is the only sane way to compare pitches measured from a decaying
+ *  spectrum — and it still catches a genuine repeat or dip, because those
+ *  differ by whole scale degrees. */
+const semitoneOf = (hz) => Math.round(12 * Math.log2(hz / 110));
 
 function measure({ b64, length, sampleRate }) {
   const raw = Buffer.from(b64, 'base64');
@@ -156,7 +153,7 @@ function measure({ b64, length, sampleRate }) {
     clipped,
     tailEnd,
     tailRms: Math.sqrt(tailSum / tailN),
-    track: pitchTrack(mix, sampleRate),
+    mix,
     ...spectrum(mix, sampleRate),
   };
 }
@@ -194,7 +191,11 @@ CASES.push(
       duration: 3.2,
       events: merges(6, 0.26, (i) => ({ tier: i + 2, combo: i + 1 })),
     },
-    expect: { decays: true, clipFree: true, rising: 0.75 },
+    expect: {
+      decays: true,
+      clipFree: true,
+      notes: { dir: 'up', at: Array.from({ length: 6 }, (_, i) => 0.05 + i * 0.26) },
+    },
   },
   {
     name: 'combo-run',
@@ -202,7 +203,12 @@ CASES.push(
       duration: 3.5,
       events: merges(6, 0.22, (i) => ({ tier: Math.min(10, i + 1), combo: i + 1 })),
     },
-    expect: { peak: [0.1, 1.0], decays: true, clipFree: true },
+    expect: {
+      peak: [0.1, 1.0],
+      decays: true,
+      clipFree: true,
+      notes: { dir: 'up', at: Array.from({ length: 6 }, (_, i) => 0.05 + i * 0.22) },
+    },
   },
   {
     name: 'merge-pileup',
@@ -277,12 +283,26 @@ CASES.push(
   {
     name: 'watermelon',
     spec: { duration: 4.0, events: [{ type: 'watermelon', t: 0.3 }] },
-    expect: { peak: [0.1, 1.0], decays: true, clipFree: true, rising: 0.7 },
+    expect: {
+      peak: [0.1, 1.0],
+      decays: true,
+      clipFree: true,
+      notes: { dir: 'up', at: (K) => Array.from({ length: 6 }, (_, i) => 0.3 + i * K.FANFARE_NOTE_SEC) },
+      // Half a second into the landing chord the fanfare must still be
+      // singing above the root, not decaying into a 110Hz drone.
+      tailPitch: { at: (0.3 + 6 * 0.085 + 0.06) + 0.5, minHz: 300 },
+      bands: { subMax: 0.2, highMin: 0.05 },
+    },
   },
   {
     name: 'gameover',
     spec: { duration: 6.0, events: [{ type: 'gameover', t: 0.1 }] },
-    expect: { peak: [0.08, 1.0], decays: true, clipFree: true, falling: 0.7 },
+    expect: {
+      peak: [0.08, 1.0],
+      decays: true,
+      clipFree: true,
+      notes: { dir: 'down', at: Array.from({ length: 4 }, (_, i) => 0.1 + i * 0.3) },
+    },
   },
   {
     name: 'voice-leak',
@@ -371,7 +391,15 @@ try {
     const m = await import('/src/audio/offline.js');
     window.__probe = m.renderOffline;
   });
-  const booted = await page.evaluate(() => !!window.__audio);
+  // boot() is async, so poll rather than race it.
+  const booted = await page.waitForFunction(() => !!window.__audio, null, { timeout: 15000 })
+    .then(() => true, () => false);
+  // Note onsets are derived from the synth's own constants, so the probe
+  // cannot drift out of step with the thing it is measuring.
+  const K = await page.evaluate(async () => {
+    const t = await import('/src/audio/theory.js');
+    return { FANFARE_NOTE_SEC: t.FANFARE_NOTE_SEC };
+  });
 
   const rows = [];
   for (const c of CASES) {
@@ -392,13 +420,32 @@ try {
     if (m.clipped > 0) bad.push(`CLIPS (${m.clipped} samples > 1.0)`);
     if (e.decays && m.tailRms > 0.0008) bad.push(`tail never dies (rms ${m.tailRms.toExponential(2)})`);
     if (Math.abs(m.dc) > (e.dc ?? 0.002)) bad.push(`DC offset ${m.dc.toExponential(2)}`);
-    if (e.rising) {
-      const r = trend(m.track, 1);
-      if (r < e.rising) bad.push(`pitch only rises ${(r * 100) | 0}% of moves (${m.track.join(' ')})`);
+    if (e.notes) {
+      const times = typeof e.notes.at === 'function' ? e.notes.at(K) : e.notes.at;
+      const hz = times.map((t) => noteHz(m.mix, SR, t));
+      const semis = hz.map(semitoneOf);
+      m.notes = hz.map((h) => h.toFixed(0)).join(' ');
+      const dir = e.notes.dir === 'up' ? 1 : -1;
+      const bad0 = semis.findIndex((v, i) => i > 0 && Math.sign(v - semis[i - 1]) !== dir);
+      if (bad0 > 0) {
+        bad.push(`note ${bad0 + 1} does not go ${e.notes.dir}: ${m.notes} Hz `
+          + `(semitones over A2: ${semis.join(' ')})`);
+      }
     }
-    if (e.falling) {
-      const r = trend(m.track, -1);
-      if (r < e.falling) bad.push(`pitch only falls ${(r * 100) | 0}% of moves (${m.track.join(' ')})`);
+    if (e.tailPitch) {
+      const h = noteHz(m.mix, SR, e.tailPitch.at);
+      m.tailHz = h;
+      if (h < e.tailPitch.minHz) {
+        bad.push(`tail is a ${h.toFixed(0)}Hz drone, want >${e.tailPitch.minHz}Hz`);
+      }
+    }
+    if (e.bands) {
+      if (e.bands.subMax && m.sub > e.bands.subMax) {
+        bad.push(`bottom-heavy: ${(m.sub * 100).toFixed(0)}% under 120Hz`);
+      }
+      if (e.bands.highMin && m.high < e.bands.highMin) {
+        bad.push(`dull: only ${(m.high * 100).toFixed(0)}% over 2.5kHz`);
+      }
     }
     if (e.admitted && (m.admitted < e.admitted[0] || m.admitted > e.admitted[1])) {
       bad.push(`gate admitted ${m.admitted}/${m.offered}, want [${e.admitted.join(', ')}]`);
@@ -444,9 +491,15 @@ try {
     const distinct = new Set(hz).size;
     cross.push([`same-tier cascade keeps moving: ${hz.join(' -> ')} Hz (${distinct} distinct)`, distinct >= 5]);
   }
-  const chain = by['chain-real'];
-  if (chain) {
-    cross.push([`real chain rises: ${chain.track.join(' ')} Hz`, trend(chain.track, 1) >= 0.75]);
+  for (const n of ['chain-real', 'combo-run']) {
+    if (by[n]?.notes) cross.push([`${n} note run: ${by[n].notes} Hz`, !rows.find((r) => r.name === n).bad.length]);
+  }
+  if (by.gameover?.notes) {
+    cross.push([`cadence descends: ${by.gameover.notes} Hz`, !rows.find((r) => r.name === 'gameover').bad.length]);
+  }
+  if (by.watermelon?.notes) {
+    cross.push([`fanfare run: ${by.watermelon.notes} Hz, tail sings at ${by.watermelon.tailHz.toFixed(0)} Hz`,
+      !rows.find((r) => r.name === 'watermelon').bad.length]);
   }
   if (by.drop && by['merge-t5']) {
     const rel = by.drop.peakDb - by['merge-t5'].peakDb;
@@ -466,7 +519,40 @@ try {
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`);
   }
 
+  // The offline renderer exercises synthesis but never touches the facade —
+  // lazy context creation, the mute ramp, the harness's `enabled = false`.
+  // Those are the paths that ship, so drive them once for real.
+  const live = await page.evaluate(async () => {
+   try {
+    const { Audio } = await import('/src/audio/audio.js');
+    const { Events } = await import('/src/core/events.js');
+    const events = new Events();
+    const a = new Audio({ events, params: new URLSearchParams('') });
+    const madeContextEarly = !!a.ctx;
+    events.emit('drop', { tier: 2, x: 0, y: 0 });
+    const madeContextOnSound = !!a.ctx;
+    for (const [n, p] of [
+      ['merge', { tier: 4, combo: 2, isNew: true }], ['impact', { speed: 8, tier: 3 }],
+      ['danger', { ratio: 0.7 }], ['danger', { ratio: 0 }], ['watermelon', {}],
+      ['gameover', {}], ['reset', {}],
+    ]) events.emit(n, p);
+    a.setMusic(true); a.setMuted(true); a.setMuted(false); a.setMusic(false);
+    const mastered = a.engine.bus.master.gain.value;
+    a.enabled = false;
+    events.emit('merge', { tier: 1, combo: 1 });
+    const pumpStopped = !a._pump;
+    a.ctx.close();
+    return { madeContextEarly, madeContextOnSound, mastered, pumpStopped };
+   } catch (err) { return { threw: String(err) }; }
+  });
+  const liveOk = !live.threw && !live.madeContextEarly && live.madeContextOnSound && live.pumpStopped;
+  if (live.threw) console.log(`  FAIL live facade threw: ${live.threw}`);
+  if (!liveOk) failures++;
   console.log('');
+  if (!live.threw) {
+    console.log(`  ${liveOk ? 'ok  ' : 'FAIL'} live facade: lazy context (${!live.madeContextEarly}), `
+      + `built on first sound (${live.madeContextOnSound}), silenced cleanly (${live.pumpStopped})`);
+  }
   console.log(`  ${buildOk ? 'ok  ' : 'FAIL'} production build`);
   console.log(`  ${booted ? 'ok  ' : 'warn'} game booted and constructed Audio${booted ? '' : ' (see errors below)'}`);
   if (errors.length) {
