@@ -1,163 +1,58 @@
-import { Texture, Rectangle, ImageSource, Sprite, Container } from 'pixi.js';
+import { Container, Sprite } from 'pixi.js';
+import { SMALL, DISPLAY, measure, textBuf, bufTexture } from '../ui/font.js';
 
 /**
- * A 3x5 bitmap font, baked once at boot.
+ * Score popups and banners, drawn in the game's one bitmap face.
  *
- * The HUD can afford a system font; floating combat text cannot — it sits
- * directly on top of the fruit at 1:1 texel scale, where anti-aliased glyph
- * edges are the most obvious "this is not pixel art" tell in the whole frame.
- * 3x5 is the smallest cell that still keeps every digit distinct at scale 1.
- */
-const GLYPHS = {
-  0: '###|#.#|#.#|#.#|###',
-  1: '.#.|##.|.#.|.#.|###',
-  2: '###|..#|###|#..|###',
-  3: '###|..#|.##|..#|###',
-  4: '#.#|#.#|###|..#|..#',
-  5: '###|#..|###|..#|###',
-  6: '###|#..|###|#.#|###',
-  7: '###|..#|..#|..#|..#',
-  8: '###|#.#|###|#.#|###',
-  9: '###|#.#|###|..#|###',
-  A: '.#.|#.#|###|#.#|#.#',
-  B: '##.|#.#|##.|#.#|##.',
-  C: '.##|#..|#..|#..|.##',
-  D: '##.|#.#|#.#|#.#|##.',
-  E: '###|#..|##.|#..|###',
-  F: '###|#..|##.|#..|#..',
-  G: '.##|#..|#.#|#.#|.##',
-  H: '#.#|#.#|###|#.#|#.#',
-  I: '###|.#.|.#.|.#.|###',
-  J: '..#|..#|..#|#.#|.#.',
-  K: '#.#|#.#|##.|#.#|#.#',
-  L: '#..|#..|#..|#..|###',
-  M: '#.#|###|###|#.#|#.#',
-  N: '##.|#.#|#.#|#.#|#.#',
-  O: '###|#.#|#.#|#.#|###',
-  P: '##.|#.#|##.|#..|#..',
-  Q: '###|#.#|#.#|###|..#',
-  R: '##.|#.#|##.|#.#|#.#',
-  S: '.##|#..|.#.|..#|##.',
-  T: '###|.#.|.#.|.#.|.#.',
-  U: '#.#|#.#|#.#|#.#|###',
-  V: '#.#|#.#|#.#|#.#|.#.',
-  W: '#.#|#.#|###|###|#.#',
-  X: '#.#|#.#|.#.|#.#|#.#',
-  Y: '#.#|#.#|.#.|.#.|.#.',
-  Z: '###|..#|.#.|#..|###',
-  '+': '...|.#.|###|.#.|...',
-  '-': '...|...|###|...|...',
-  '!': '.#.|.#.|.#.|...|.#.',
-  '.': '...|...|...|...|.#.',
-  ' ': '...|...|...|...|...',
-};
-
-const GLYPH_W = 3;
-const GLYPH_H = 5;
-/** 1px letterspacing keeps 3-wide glyphs from fusing into a solid bar. */
-const TRACKING = 1;
-
-/** Two masks per glyph: the fill, and a 1px-dilated silhouette behind it.
- *  Baking the outline separately means the caller can tint body and outline
- *  independently instead of re-drawing the string four times at offsets. */
-let CACHE = null;
-
-function maskTexture(cells, w, h) {
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const c2d = canvas.getContext('2d');
-  const img = c2d.createImageData(w, h);
-  for (let i = 0; i < cells.length; i++) {
-    if (!cells[i]) continue;
-    img.data[i * 4] = 255;
-    img.data[i * 4 + 1] = 255;
-    img.data[i * 4 + 2] = 255;
-    img.data[i * 4 + 3] = 255;
-  }
-  c2d.putImageData(img, 0, 0);
-  const source = new ImageSource({
-    resource: canvas,
-    scaleMode: 'nearest',
-    alphaMode: 'premultiply-alpha-on-upload',
-  });
-  return new Texture({ source, frame: new Rectangle(0, 0, w, h) });
-}
-
-function bake() {
-  const out = new Map();
-  for (const [ch, spec] of Object.entries(GLYPHS)) {
-    const rows = spec.split('|');
-    const fill = new Uint8Array(GLYPH_W * GLYPH_H);
-    for (let y = 0; y < GLYPH_H; y++) {
-      for (let x = 0; x < GLYPH_W; x++) {
-        if (rows[y][x] === '#') fill[y * GLYPH_W + x] = 1;
-      }
-    }
-    // Dilate by one texel in all eight directions for the drop-out outline.
-    const ow = GLYPH_W + 2, oh = GLYPH_H + 2;
-    const halo = new Uint8Array(ow * oh);
-    for (let y = 0; y < GLYPH_H; y++) {
-      for (let x = 0; x < GLYPH_W; x++) {
-        if (!fill[y * GLYPH_W + x]) continue;
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) halo[(y + 1 + dy) * ow + (x + 1 + dx)] = 1;
-        }
-      }
-    }
-    out.set(ch, {
-      fill: maskTexture(fill, GLYPH_W, GLYPH_H),
-      halo: maskTexture(halo, ow, oh),
-    });
-  }
-  return out;
-}
-
-function glyphs() {
-  if (!CACHE) CACHE = bake();
-  return CACHE;
-}
-
-/**
- * Build a container holding one string, always at 1:1.
+ * This module used to carry its own glyph set, which is why popups and the
+ * HUD disagreed about what the game's typeface was. It now adapts the UI
+ * face and keeps only what the FX layer actually needs on top: a silhouette
+ * behind the ink, and recolouring without a texture rebuild.
  *
- * Callers enlarge it by setting an integer scale on the returned container:
- * every glyph inside sits at a whole-texel offset, so an integer container
- * scale keeps the whole string on the texel grid. A fractional one would give
- * the same string uneven stem widths, which is the artefact this font exists
- * to avoid.
+ * The ink is rendered white and tinted, so a popup can flash through several
+ * colours per frame without re-rasterising a single glyph.
  */
-export function makeText(str, { fill = 0xffffff, outline = 0x1a0e20 } = {}) {
+
+const FACES = { small: SMALL, display: DISPLAY };
+
+/** Cache keyed by string + face + outline: popups repeat the same few words. */
+const cache = new Map();
+
+function textures(str, faceName, outline) {
+  const key = `${faceName}|${outline}|${str}`;
+  let entry = cache.get(key);
+  if (entry) return entry;
+
+  const face = FACES[faceName];
+  // Halo and ink are separate textures so the ink stays tintable; baking the
+  // outline into one texture would tint the outline along with the letters.
+  const halo = bufTexture(textBuf(str, { face, colour: outline, outline }));
+  const ink = bufTexture(textBuf(str, { face, colour: 0xffffff }));
+  entry = { halo, ink, w: measure(str, face), h: face.h };
+  cache.set(key, entry);
+  return entry;
+}
+
+export function makeText(str, { fill = 0xffffff, outline = 0x1a0e20, face = 'small' } = {}) {
+  const t = textures(str, face, outline);
   const box = new Container();
-  const g = glyphs();
-  const step = GLYPH_W + TRACKING;
-  const halos = new Container();
-  const fills = new Container();
-  box.addChild(halos, fills);
 
-  for (let i = 0; i < str.length; i++) {
-    const glyph = g.get(str[i]) || g.get(' ');
-    const x = i * step;
+  const halo = new Sprite(t.halo);
+  // textBuf pads by one texel for the outline; the ink is unpadded, so the
+  // halo shifts back by that pad to keep the two in register.
+  halo.x = -1;
+  halo.y = -1;
+  const inkSprite = new Sprite(t.ink);
+  inkSprite.tint = fill;
+  box.addChild(halo, inkSprite);
 
-    const h = new Sprite(glyph.halo);
-    h.x = x - 1;
-    h.y = -1;
-    h.tint = outline;
-    halos.addChild(h);
-
-    const f = new Sprite(glyph.fill);
-    f.x = x;
-    f.tint = fill;
-    fills.addChild(f);
-  }
-
-  box.fxWidth = Math.max(0, str.length * step - TRACKING);
-  box.fxHeight = GLYPH_H;
-  box.fxFills = fills;
+  box.fxWidth = t.w;
+  box.fxHeight = t.h;
+  box.fxFills = inkSprite;
   return box;
 }
 
-/** Recolour a string built by `makeText` without rebuilding its sprites. */
+/** Recolour a string built by `makeText` without rebuilding its texture. */
 export function tintText(box, fill) {
-  for (const s of box.fxFills.children) s.tint = fill;
+  box.fxFills.tint = fill;
 }
