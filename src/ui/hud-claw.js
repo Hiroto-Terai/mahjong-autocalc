@@ -9,7 +9,7 @@ const RAIL_H = 5;
 /** Carriage box, centred on the aim column. */
 const CAR_W = 21;
 const CAR_Y = 26;
-const CAR_H = 13;
+const CAR_H = 14;
 
 /**
  * The dropper: a gantry rail, a carriage that rides it, and a two-finger
@@ -73,30 +73,35 @@ export class Claw {
     g.clear();
 
     const outer = r + 3;
-    // Clamp the yoke up under the rail for the big fruit; anything lower and
-    // the bar would cut across the fruit's face.
-    const yokeY = Math.max(RAIL_Y + 1, DROP.y - r - 4);
-    const armBottom = DROP.y + Math.round(r * 0.35);
+    // The yoke hangs at a fixed height off the carriage instead of tracking
+    // the fruit: a beam that crosses the fruit's brow reads as hardware
+    // holding it, where a beam floating above reads as two loose posts.
+    const yokeY = CAR_Y + CAR_H - 2;
+    const armBottom = DROP.y + Math.round(r * 0.45);
 
-    // Yoke: one bar through the whole span, its middle hidden by the carriage.
-    px(g, cx - outer - 1, yokeY - 1, outer * 2 + 3, 4, THEME.ink);
-    px(g, cx - outer, yokeY, outer * 2 + 1, 1, THEME.steelLite);
-    px(g, cx - outer, yokeY + 1, outer * 2 + 1, 1, THEME.steel);
+    px(g, cx - outer - 2, yokeY - 1, outer * 2 + 5, 5, THEME.ink);
+    px(g, cx - outer - 1, yokeY, outer * 2 + 3, 1, THEME.steelLite);
+    px(g, cx - outer - 1, yokeY + 1, outer * 2 + 3, 2, THEME.steel);
+    px(g, cx - outer - 1, yokeY + 2, outer * 2 + 3, 1, THEME.steelDark);
 
     for (const s of [-1, 1]) {
-      const x = cx + s * outer - (s < 0 ? 1 : 0);
-      // Arm: dark silhouette first, steel inset into it.
-      px(g, x - 1, yokeY, 4, armBottom - yokeY + 1, THEME.ink);
-      px(g, x, yokeY + 2, 2, armBottom - yokeY - 2, s < 0 ? THEME.steel : THEME.steelDark);
-      px(g, x + (s < 0 ? 0 : 1), yokeY + 2, 1, armBottom - yokeY - 2, s < 0 ? THEME.steelLite : THEME.steel);
-      // Hook curling in toward the fruit.
-      const hx = s < 0 ? x : x - 3;
-      px(g, hx - (s < 0 ? 1 : 0), armBottom - 1, 6, 4, THEME.ink);
-      px(g, s < 0 ? x + 2 : x - 3, armBottom, 3, 2, THEME.steel);
-      px(g, s < 0 ? x + 2 : x - 3, armBottom, 3, 1, THEME.steelLite);
+      const x = cx + s * outer;
+      // Arm: silhouette first, then a 2px steel face with the lit edge always
+      // on the same side as the key light.
+      px(g, x - 2, yokeY, 5, armBottom - yokeY + 4, THEME.ink);
+      px(g, x - 1, yokeY + 1, 3, armBottom - yokeY + 2, THEME.steelDark);
+      px(g, x - 1, yokeY + 1, 1, armBottom - yokeY + 2, THEME.steelLite);
+      px(g, x, yokeY + 1, 1, armBottom - yokeY + 2, THEME.steel);
+      // Hook: curls in under the fruit and finishes with an upturned tip.
+      const inward = s < 0 ? 1 : -5;
+      px(g, x + inward - (s < 0 ? 1 : 0), armBottom, 6, 4, THEME.ink);
+      px(g, x + inward, armBottom + 1, 5, 2, THEME.steel);
+      px(g, x + inward, armBottom + 1, 5, 1, THEME.steelLite);
+      px(g, x + inward + (s < 0 ? 4 : 0), armBottom - 1, 1, 2, THEME.steelLite);
+      // Pivot bolt where the arm meets the yoke.
+      px(g, x - 1, yokeY + 4, 2, 1, THEME.ink);
     }
 
-    // Carriage.
     const cw = CAR_W;
     const cx0 = cx - ((cw - 1) >> 1);
     px(g, cx0 - 1, CAR_Y - 1, cw + 2, CAR_H + 2, THEME.ink);
@@ -105,7 +110,6 @@ export class Claw {
     px(g, cx0, CAR_Y + CAR_H - 1, cw, 1, THEME.steelDark);
     px(g, cx0, CAR_Y + 1, 1, CAR_H - 2, THEME.steelLite, 0.5);
     px(g, cx0 + cw - 1, CAR_Y + 1, 1, CAR_H - 2, THEME.steelDark);
-    // Bolt heads either side of the charge slot.
     for (const bx of [cx0 + 2, cx0 + cw - 3]) {
       px(g, bx, CAR_Y + 3, 1, 1, THEME.ink);
       px(g, bx, CAR_Y + 4, 1, 1, THEME.steelLite, 0.6);
@@ -115,7 +119,7 @@ export class Claw {
     // player learns the rhythm from the machine rather than from a number.
     const sw = cw - 8;
     const sx = cx0 + 4;
-    const sy = CAR_Y + CAR_H - 5;
+    const sy = CAR_Y + 5;
     px(g, sx - 1, sy - 1, sw + 2, 5, THEME.ink);
     px(g, sx, sy, sw, 3, 0x141a2b);
     const fill = Math.round(sw * charge);
@@ -133,11 +137,11 @@ export class Claw {
 
     const top = DROP.y + r + 4;
     const floor = BOARD.floor - 1;
-    dashV(g, cx, top, floor - 3, { on: 3, off: 5, colour: THEME.gold, alpha: 0.42, fade: 0.75 });
+    dashV(g, cx, top, floor - 3, { on: 4, off: 4, colour: THEME.gold, alpha: 0.6, fade: 0.55 });
     // Width whiskers: the fruit's true footprint, so a tight gap can be judged
     // before committing rather than after.
     for (const s of [-1, 1]) {
-      dashV(g, cx + s * r, top + 6, top + 40, { on: 1, off: 6, colour: THEME.gold, alpha: 0.2, fade: 1 });
+      dashV(g, cx + s * r, top + 6, top + 46, { on: 1, off: 5, colour: THEME.gold, alpha: 0.3, fade: 1 });
     }
     // Landing bracket on the floor.
     px(g, cx - r, floor - 1, r * 2 + 1, 1, THEME.gold, 0.16);

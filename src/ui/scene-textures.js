@@ -12,11 +12,16 @@ import { hex, mix } from '../art/palette.js';
  * wrong one — the GPU resolves every ellipse edge its own way, and a jar
  * assembled from stacked rects cannot carry a curved lip at all.
  *
- * Two rules run through the whole file:
+ * Three rules run through the whole file:
  *   - Large surfaces (wall, tabletop, jar interior) are flat ramp stops with
- *     ordered dithering confined to a narrow band at each stop boundary.
- *   - Small chrome (rim, glass walls, base) is never dithered. A 4-texel-tall
- *     lip has room for four decisions, not a probability distribution.
+ *     ordered dithering confined to a narrow band at each stop boundary, and
+ *     every plateau in the shading function lands on a whole stop. A plateau
+ *     that lands halfway between two stops dithers 50/50 across its entire
+ *     area, which is how the interior became a checkerboard.
+ *   - Small chrome (rim, glass walls, base) is never dithered. A 3-texel-tall
+ *     lip has room for three decisions, not a probability distribution.
+ *   - The jar is one silhouette. Rim, wall and base share an outer edge and a
+ *     single rasterised curve, so nothing overhangs anything else.
  */
 
 /**
@@ -41,10 +46,10 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
  * Quantise a continuous ramp position onto flat stops.
  *
  * The fractional part is contrast-stretched before it meets the Bayer
- * threshold, so only `band` of each stop's extent contains mixed texels and
- * the rest is genuinely flat. Feeding the raw fraction straight to the
- * threshold — the obvious implementation — dithers the entire surface, which
- * is the "downsampled 3D render" failure the art bible names.
+ * threshold, so only `band` of each stop's extent carries mixed texels and the
+ * rest is genuinely flat. Callers must keep their flat regions on whole values
+ * of `s`: the stretch is centred on the half-stop, so a surface that sits at
+ * exactly n + 0.5 dithers everywhere no matter how narrow the band is.
  */
 function pick(stops, s, x, y, band = 0.14) {
   const lo = Math.floor(s);
@@ -59,73 +64,97 @@ function qAlpha(x, y, a, steps = 5) {
   return clamp(lo + (s - lo > b8(x, y) ? 1 : 0), 0, steps) / steps;
 }
 
-/** Half-height of an ellipse at column x, or null outside its span. */
-function arc(x, cx, rx, ry) {
-  const u = (x - cx) / rx;
+/* ------------------------------------------------------------------ *
+ * Jar geometry.
+ *
+ * The playfield is 264 texels wide starting at BOARD.left, so its columns
+ * are 28..291 and its true centre is 159.5. Everything here is built on
+ * that half-texel centre: rounding it to 160 is what previously left the
+ * left glass covering a column of fruit that the right glass did not.
+ * ------------------------------------------------------------------ */
+const CX = (BOARD.left + BOARD.right - 1) / 2;
+/** Columns of the mouth — exactly the columns the physics board occupies. */
+const MOUTH_X0 = BOARD.left;
+const MOUTH_X1 = BOARD.right - 1;
+/** Glass thickness, and therefore the jar's outer silhouette. */
+const WALL_W = 8;
+const RX = BOARD_W / 2 + WALL_W - 0.5;
+const RY = 12;
+const RIM_Y = 76;
+/** Depth of the rim's top face, constant all the way round. */
+const RIM_T = 4;
+/** Rows of front glass visible below the lip before it turns transparent. */
+const LIP_H = 6;
+const BASE_H = 10;
+const FOOT_H = 4;
+/** Where the back wall meets the tabletop. */
+const TABLE_Y = 402;
+
+const WALL_X0 = Math.round(CX - RX);
+const WALL_X1 = Math.round(CX + RX);
+
+/**
+ * Row offset of the jar's outer silhouette at column x, or null off the ends.
+ * One curve, rasterised once: the rim's inner edge is this curve offset by
+ * RIM_T rather than a second ellipse, so the top face is exactly RIM_T texels
+ * everywhere instead of wobbling between two and four.
+ */
+function rimArc(x) {
+  const u = (x - CX) / RX;
   if (u < -1 || u > 1) return null;
-  return ry * Math.sqrt(1 - u * u);
+  return RY * Math.sqrt(1 - u * u);
 }
 
-/* ------------------------------------------------------------------ *
- * Jar geometry. rxIn is pinned so the inner faces of the glass land
- * exactly on BOARD.left/right — the fruit must touch the glass, not
- * hover a texel away from it.
- * ------------------------------------------------------------------ */
-const JAR = {
-  cx: 160,
-  /** Centre of the mouth ellipse. */
-  rimY: 76,
-  rxOut: 141, ryOut: 11,
-  rxIn: BOARD_W / 2, ryIn: 7,
-  /** How far the outside of the lip is extruded below the mouth. */
-  lipH: 7,
-  /** Outer edge of the side glass; the inner face is BOARD.left/right. */
-  wallOut: 21,
-  baseH: 10,
-  footH: 4,
-  /** Where the back wall meets the tabletop. */
-  tableY: 402,
-};
+/** Rows of the lip at column x: outer edges, inner edges, and whether it is open. */
+function rimRows(x) {
+  const a = rimArc(x);
+  if (a === null) return null;
+  const oT = Math.round(RIM_Y - a);
+  const oB = Math.round(RIM_Y + a);
+  const open = x >= MOUTH_X0 && x <= MOUTH_X1;
+  return { oT, oB, iT: oT + RIM_T, iB: oB - RIM_T, open };
+}
 
 /* ---- palettes ---------------------------------------------------- */
 
 const WALL = [0x090d1a, 0x0f1528, 0x161e3c, 0x1d2750, 0x242f63].map(hex);
-const WOOD = [0x1c1422, 0x2a1e2e, 0x3a293a, 0x4a3446, 0x5b4053].map(hex);
-const INNER = [0x080b18, 0x0c1024, 0x101632, 0x151d40, 0x1b254e].map(hex);
+/**
+ * Cool, so the tabletop stays in the indigo family instead of going plum. The
+ * two darkest stops exist for the jar's cast shadow, which is shaded on this
+ * ramp rather than blended over it.
+ */
+const WOOD = [0x0b0916, 0x100e1e, 0x161528, 0x201d35, 0x2a2644, 0x353053, 0x413b63].map(hex);
+const INNER = [0x070a16, 0x0a0e20, 0x0d1329, 0x111834, 0x151d40, 0x1a234d].map(hex);
 /** One ramp for every piece of glass, so the jar reads as one material. */
 const GLASS = [0x0a0e1c, 0x151c39, 0x232c52, 0x374472, 0x54649c, 0x8391cb].map(hex);
-const SHADOW = hex(0x06060f);
 /** Board joints in the tabletop. */
 const PLANKS = [419, 447, 472];
 
-/** Side glass as GLASS indices. Left: outer edge inward, ending on BOARD.left. */
-const WALL_L = [0, 3, 4, 5, 4, 2, 1, 1];
-/** Right: inner face outward. Dimmer throughout — the key light is upper-left. */
-const WALL_R = [1, 1, 2, 3, 4, 4, 2, 0];
-const SPEC_L = 3;
-const SPEC_R = 5;
-
-/** The lip's outer skirt, top row down. Wide enough to read as thickness. */
-const SKIRT_ROWS = [4, 4, 3, 2, 2, 1, 0];
-/** Glass floor, top row down: dark against the fruit, then thickness, then edge. */
-const BASE_ROWS = [1, 3, 4, 4, 3, 2, 2, 1, 1, 0];
-const FOOT_ROWS = [3, 2, 1, 0];
 /**
- * Horizontal falloff of the lip's specular run, stepped rather than faded. A
- * highlight that dims smoothly across 250 texels is a gradient, and one that
- * stops dead mid-rim reads as a bug; two hard steps read as a decision.
+ * Side glass as GLASS indices, outer edge inward. One profile, mirrored, so
+ * the two walls are the same width with their highlight at the same inset —
+ * the key light is carried by DIM_R alone, not by a different profile.
  */
-function glintX(x) {
-  const d = Math.abs(x - 116);
-  return d < 58 ? 2 : d < 88 ? 1 : 0;
-}
+const WALL_PROFILE = [0, 3, 4, 5, 4, 2, 1, 1];
+/** The right wall turns away from the light: same shape, one stop down. */
+const DIM_R = [0, 2, 3, 4, 3, 2, 1, 1];
+
+/** Near rim top face, inner edge outward: into the mouth, then the lit edge. */
+const RIM_ROWS = [1, 4, 5, 5];
+/** Far rim top face, outer edge inward: silhouette, lit face, then the mouth. */
+const RIM_BACK = [1, 4, 4, 3];
+/** Lip skirt, top row down — the front glass curving away under the rim. */
+const SKIRT_ROWS = [5, 4, 3, 2, 1, 0];
+/** Glass floor, top row down: dark against the fruit, thickness, dark edge. */
+const BASE_ROWS = [1, 3, 4, 5, 4, 3, 2, 1, 1, 0];
+const FOOT_ROWS = [4, 3, 1, 0];
 
 /* ------------------------------------------------------------------ *
  * Background: wall, recessed alcove, light pool, vignette, tabletop.
  * ------------------------------------------------------------------ */
 export function buildBackground() {
   const buf = new PixBuf(VIRTUAL_W, VIRTUAL_H);
-  const T = JAR.tableY;
+  const T = TABLE_Y;
   // The alcove the jar stands in. Its edges are the only hard lines on the
   // wall, and they are what stop the top of the frame reading as void.
   const NX0 = 9, NX1 = 310, NY = 46;
@@ -155,7 +184,7 @@ export function buildBackground() {
       if (y >= T - 9 && y < T - 2) s += y === T - 9 ? 1.9 : 1.1;
 
       // Vignette.
-      const v = Math.hypot((x - JAR.cx) / 170, (y - 250) / 265);
+      const v = Math.hypot((x - CX) / 170, (y - 250) / 265);
       s -= Math.max(0, v - 0.72) * 3.2;
       // Contact darkening where the wall meets the table.
       s -= Math.max(0, 1 - (T - y) / 22) * 1.5;
@@ -169,181 +198,147 @@ export function buildBackground() {
     buf.set(x, T - 1, hex(0x04060c), 255);
   }
 
+  // The shadow the jar casts on the table is part of the tabletop's shading,
+  // not a wash laid over it, so it stays on the wood ramp: a cast shadow that
+  // blends off-palette is the fastest way to make a pixel surface look
+  // photographic. It has to be strong — the jar's own base hides the contact
+  // point, and this pool is the only thing saying the vessel stands on
+  // anything — but it hugs the foot rather than blanketing the surface, or it
+  // swallows the plank seams that carry the floor from one margin to the other.
+  const footBot = BOARD.floor + BASE_H + FOOT_H;
   for (let y = T; y < VIRTUAL_H; y++) {
     for (let x = 0; x < VIRTUAL_W; x++) {
       const t = (y - T) / (VIRTUAL_H - 1 - T);
       // The far edge catches the wall light; the near edge rolls into shadow.
-      let s = 3.6 - t * 3.0;
+      let s = 5.6 - t * 2.2;
       // Plank seams and nothing else. Every attempt at grain here — periodic
-      // or hashed — turned 19 texels of visible margin into brickwork; the
-      // joints alone say "tabletop" and stay quiet.
-      if (PLANKS.includes(y)) s -= 2.6;
-      else if (PLANKS.includes(y - 1)) s += 1.2;
-      s -= Math.max(0, Math.abs(x - JAR.cx) / 160 - 0.5) * 1.8;
+      // or hashed — turned the visible margin into brickwork; the joints alone
+      // say "tabletop" and stay quiet.
+      if (PLANKS.includes(y)) s -= 1.8;
+      else if (PLANKS.includes(y - 1)) s += 0.8;
+      s -= Math.max(0, Math.abs(x - CX) / 160 - 0.5) * 1.8;
+      // Centred a few rows above the contact so the pool still reads in the
+      // side margins: the rows directly in front of the foot are the ones the
+      // HUD's bottom bar covers.
+      const d = Math.hypot((x - CX) / 196, (y - (footBot - 6)) / 22);
+      if (d < 1) s -= Math.min(3.4, (1 - d) * 6.5);
       buf.set(x, y, pick(WOOD, s, x, y, 0.2), 255);
     }
   }
   // The lit lip of the tabletop where it meets the wall.
-  for (let x = 0; x < VIRTUAL_W; x++) buf.set(x, T, mix(WOOD[4], hex(0x7a5b6b), 0.5), 255);
-
-  // Contact shadow the jar casts on the table. The jar occludes most of it,
-  // but the margins are exactly where the base needs to feel planted.
-  for (let y = T; y < VIRTUAL_H; y++) {
-    for (let x = 0; x < VIRTUAL_W; x++) {
-      const d = Math.hypot((x - JAR.cx) / 178, (y - 466) / 17);
-      if (d >= 1) continue;
-      const a = qAlpha(x, y, Math.min(0.85, (1 - d) * 1.6));
-      if (a <= 0) continue;
-      const c = buf.get(x, y);
-      buf.set(x, y, mix([c[0], c[1], c[2]], SHADOW, a), 255);
-    }
-  }
+  for (let x = 0; x < VIRTUAL_W; x++) buf.set(x, T, mix(WOOD[6], hex(0x6d6690), 0.5), 255);
   return buf;
 }
 
 /* ------------------------------------------------------------------ *
- * Jar interior + the far half of the mouth, seen through the opening.
+ * Jar interior + the far half of the rim, seen through the mouth.
  * ------------------------------------------------------------------ */
 export function buildJarBack() {
   const buf = new PixBuf(VIRTUAL_W, VIRTUAL_H);
-  const L = BOARD.left, R = BOARD.right, F = BOARD.floor;
+  const F = BOARD.floor;
+  const halfW = (MOUTH_X1 - MOUTH_X0) / 2;
 
-  for (let x = L; x < R; x++) {
-    // The opening is an ellipse, so the interior starts higher at the centre
-    // than at the sides. A flat top edge is what made the placeholder read as
-    // a rectangle rather than a mouth.
-    const top = Math.round(JAR.rimY - (arc(x, JAR.cx, JAR.rxIn, JAR.ryIn) ?? 0));
-    const dEdge = Math.min(x - L, R - 1 - x);
+  for (let x = MOUTH_X0; x <= MOUTH_X1; x++) {
+    const rim = rimRows(x);
+    const top = rim.iT;
+    // Cylinder, not a box: the interior turns away from the viewer toward the
+    // glass on both sides. Every term below peaks at a whole stop so the flat
+    // middle of the jar is genuinely flat.
+    const u = (x - CX) / halfW;
+    const curve = 3 * Math.sqrt(Math.max(0, 1 - u * u));
     for (let y = top; y < F; y++) {
-      // Deliberately dark through the middle: light spills a short way in
-      // under the mouth, the glass floor throws a little back up, and between
-      // those two the jar is a shadowed volume — which is the only reason an
-      // 8px cherry reads against it. Both terms are functions of y alone; any
-      // x term here lays a visible diagonal stop boundary across the playfield.
-      let s = 0.5;
-      s += Math.max(0, 1 - (y - top) / 34) * 2.4;
-      s += Math.max(0, 1 - (F - 1 - y) / 78) * 2.0;
-      s -= Math.max(0, 1 - dEdge / 26) * 1.4;
-      s -= Math.max(0, 1 - (F - 1 - y) / 11) * 1.9;
-      buf.set(x, y, pick(INNER, s, x, y, 0.2), 255);
+      let s = curve;
+      s += Math.max(0, 1 - (y - top) / 30) * 2;
+      s += Math.max(0, 1 - (F - 1 - y) / 70) * 2;
+      s -= Math.max(0, 1 - (F - 1 - y) / 10) * 3;
+      buf.set(x, y, pick(INNER, s, x, y, 0.16), 255);
     }
   }
 
-  // Far half of the mouth: the annulus above the rim centreline. Seen almost
-  // edge-on and lit from the front, so it sits a stop below the near half.
-  eachRimColumn(({ x, oT, iT, split }) => {
-    if (!split) return;
-    const g = glintX(x);
-    for (let y = oT; y < iT; y++) {
-      // Outer row is the silhouette against the wall, inner row drops into the
-      // mouth, and the band between is the far lip catching a little light.
-      const i = y === oT || y === iT - 1 ? 1 : 2 + (g > 1 ? 1 : 0);
-      buf.set(x, y, GLASS[i], 255);
-    }
-  });
+  // Far half of the rim: seen almost edge-on and lit from the front, so it
+  // sits below the near half rather than mirroring it.
+  for (let x = MOUTH_X0; x <= MOUTH_X1; x++) {
+    const { oT, iT } = rimRows(x);
+    for (let y = oT; y < iT; y++) buf.set(x, y, GLASS[RIM_BACK[y - oT]], 255);
+  }
   return buf;
 }
 
-/**
- * Walk every column of the mouth, handing back the rows of the outer and
- * inner ellipses. `split` is false out at the ends, where the mouth is past
- * the inner ellipse and the lip is solid glass all the way through.
- */
-function eachRimColumn(fn) {
-  for (let x = JAR.cx - JAR.rxOut; x <= JAR.cx + JAR.rxOut; x++) {
-    const aOut = arc(x, JAR.cx, JAR.rxOut, JAR.ryOut);
-    if (aOut === null) continue;
-    const aIn = arc(x, JAR.cx, JAR.rxIn, JAR.ryIn);
-    const oT = Math.round(JAR.rimY - aOut);
-    const oB = Math.round(JAR.rimY + aOut);
-    if (aIn === null) fn({ x, oT, oB, iT: oT, iB: oB, split: false });
-    else fn({ x, oT, oB, iT: Math.round(JAR.rimY - aIn), iB: Math.round(JAR.rimY + aIn), split: true });
-  }
-}
-
 /* ------------------------------------------------------------------ *
- * Everything in front of the fruit: near half of the mouth, the lip
- * skirt, the side glass, the base, and the shine.
+ * Everything in front of the fruit: side glass, base, near half of the
+ * rim, the lip, and the shine.
  * ------------------------------------------------------------------ */
 export function buildJarFront() {
   const buf = new PixBuf(VIRTUAL_W, VIRTUAL_H);
-  const L = BOARD.left, R = BOARD.right, F = BOARD.floor;
-  const baseBot = F + JAR.baseH;
-
-  /** First row below the lip skirt for a given column. */
-  const underLip = (x) =>
-    Math.round(JAR.rimY + (arc(x, JAR.cx, JAR.rxOut, JAR.ryOut) ?? 0)) + JAR.lipH + 1;
+  const F = BOARD.floor;
+  const baseBot = F + BASE_H;
 
   // --- side glass -------------------------------------------------
-  for (let i = 0; i < WALL_L.length; i++) {
-    for (const [x, idx, spec] of [[JAR.wallOut + i, WALL_L[i], i === SPEC_L],
-                                  [R + i, WALL_R[i], i === SPEC_R]]) {
-      const top = underLip(x);
-      for (let y = top; y < baseBot; y++) {
-        buf.set(x, y, GLASS[clamp(idx + (spec ? glint(y, top, baseBot) : 0), 0, 5)], 255);
+  // Each column starts one row under the lip's outer edge at that column, so
+  // the wall and the rim cap are a single unbroken piece of glass.
+  for (let i = 0; i < WALL_W; i++) {
+    // Columns 2..4 carry the highlight on both sides, so the breaks in it are
+    // the same width left and right.
+    const lit = i >= 2 && i <= 4;
+    for (const [x, idx] of [[WALL_X0 + i, WALL_PROFILE[i]], [WALL_X1 - i, DIM_R[i]]]) {
+      const { oB } = rimRows(x);
+      for (let y = oB + 1; y < baseBot; y++) {
+        buf.set(x, y, GLASS[clamp(idx + (lit ? glint(y, oB, baseBot) : 0), 0, 5)], 255);
       }
     }
   }
 
   // --- base -------------------------------------------------------
-  for (let k = 0; k < JAR.baseH; k++) {
-    // The bright rows fall off toward the ends, so the whole jar agrees with
-    // the lip about where the light is coming from.
-    const shaped = BASE_ROWS[k] >= 4;
-    for (let x = L; x < R; x++) {
-      const i = shaped && Math.abs(x - 124) > 96 ? BASE_ROWS[k] - 1 : BASE_ROWS[k];
-      buf.set(x, F + k, GLASS[i], 255);
-    }
+  for (let k = 0; k < BASE_H; k++) {
+    for (let x = MOUTH_X0; x <= MOUTH_X1; x++) buf.set(x, F + k, GLASS[BASE_ROWS[k]], 255);
   }
   // Foot: flares two texels wider than the walls so the jar sits, not floats.
-  for (let k = 0; k < JAR.footH; k++) {
+  for (let k = 0; k < FOOT_H; k++) {
     const flare = k >= 2 ? 2 : 1;
-    for (let x = JAR.wallOut - flare; x <= R + WALL_L.length - 1 + flare; x++) {
+    for (let x = WALL_X0 - flare; x <= WALL_X1 + flare; x++) {
       buf.set(x, baseBot + k, GLASS[FOOT_ROWS[k]], 255);
     }
   }
 
-  // --- near half of the mouth + the lip skirt ----------------------
-  eachRimColumn(({ x, oT, oB, iB, split }) => {
-    const g = glintX(x);
-    const top = split ? iB : oT;
-    for (let y = top; y <= oB; y++) {
-      // Inner corner drops into the mouth, the row behind it is the ridge the
-      // light catches, the outer row is the silhouette. That sequence is what
-      // makes a lip read as thick glass instead of a painted band.
-      let i;
-      if (y === top) i = 1;
-      else if (y === oB) i = clamp(4 + (g > 0 ? 1 : 0), 0, 5);
-      else i = 3 + (g > 1 ? 1 : 0);
-      buf.set(x, y, GLASS[i], 255);
+  // --- near half of the rim, and the lip below it ------------------
+  for (let x = WALL_X0; x <= WALL_X1; x++) {
+    const { oT, oB, iB, open } = rimRows(x);
+    if (open) {
+      // Across the mouth the lip is a RIM_T-deep annulus: it drops into the
+      // opening, then climbs to the edge the light catches.
+      for (let y = iB + 1; y <= oB; y++) buf.set(x, y, GLASS[RIM_ROWS[y - iB - 1]], 255);
+      for (let k = 0; k < LIP_H; k++) buf.set(x, oB + 1 + k, GLASS[SKIRT_ROWS[k]], 255);
+    } else {
+      // Over the side glass the lip is solid glass end-on, and its bottom row
+      // hands straight over to the wall column beneath it.
+      for (let y = oT; y <= oB; y++) {
+        const d = oB - y;
+        buf.set(x, y, GLASS[y === oT && oB > oT ? 1 : d === 0 ? 5 : d === 1 ? 4 : 3], 255);
+      }
     }
-    for (let k = 0; k < JAR.lipH; k++) {
-      const i = k < 2 ? clamp(SKIRT_ROWS[k] - 2 + g, 0, 5) : SKIRT_ROWS[k];
-      buf.set(x, oB + 1 + k, GLASS[i], 255);
-    }
-  });
+  }
 
   // --- glass tint over the fruit -----------------------------------
   // A hard inner shadow would eat the fruit outline, so this is a three-texel
   // falloff: enough to say "behind glass", not enough to lose a cherry that
   // has settled against the wall.
-  const tint = hex(0x0a0f22);
+  const tint = hex(0x04060e);
   const tintCols = [0.24, 0.12, 0.05];
   for (let i = 0; i < tintCols.length; i++) {
-    for (let y = underLip(L + i); y < F; y++) setTint(buf, L + i, y, tint, tintCols[i]);
-    for (let y = underLip(R - 1 - i); y < F; y++) setTint(buf, R - 1 - i, y, tint, tintCols[i]);
+    for (const x of [MOUTH_X0 + i, MOUTH_X1 - i]) {
+      const top = rimRows(x).oB + LIP_H + 1;
+      for (let y = top; y < F; y++) setTint(buf, x, y, tint, tintCols[i]);
+    }
   }
-  for (let x = L + 3; x < R - 3; x++) {
+  for (let x = MOUTH_X0 + 3; x <= MOUTH_X1 - 3; x++) {
     for (let i = 0; i < tintCols.length; i++) setTint(buf, x, F - 1 - i, tint, tintCols[i]);
   }
 
   // --- shine -------------------------------------------------------
-  // Flat alpha with hard edges. A dithered shine over a dithered background
-  // reads as dead pixels, not glass.
+  // Flat alpha with hard edges. A dithered shine over a dithered interior
+  // reads as dead pixels, not glass. Both highlights hug the inside of the
+  // left glass; floated into the middle of the jar they read as scratches.
   const shine = hex(0xd8e5ff);
-  // Both highlights hug the inside of the left glass. Floated out into the
-  // middle of the jar they read as scratches rather than as a reflection in
-  // the wall the light is actually hitting.
   streak(buf, shine, 31, 4, 104, 268, 0.14);
   streak(buf, shine, 38, 2, 116, 214, 0.09);
   // A short cold reflection low on the right, so the glass reads as a cylinder
@@ -370,8 +365,7 @@ function setTint(buf, x, y, colour, a) {
 
 /**
  * Shine bar with a capsule profile: flat alpha, hard edges, ends stepped in a
- * texel at a time. A dithered highlight sitting over a dithered interior reads
- * as dead pixels, not as glass.
+ * texel at a time.
  */
 function streak(buf, colour, x0, w, y0, y1, alpha) {
   const a = Math.round(alpha * 255);

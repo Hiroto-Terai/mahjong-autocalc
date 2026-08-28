@@ -6,6 +6,18 @@ import { FRUITS } from '../config.js';
 const POP_MS = 220;
 
 /**
+ * Contact shadow, cast down-right because the key light sits upper-left.
+ *
+ * A sprite cannot darken itself *because a neighbour is there*, so without
+ * this a packed jar reads as a sticker sheet: every fruit shows its brightest
+ * stop right up against the next one, and the crevice — physically the
+ * darkest point on the pile — comes out at full brightness. Each fruit draws
+ * its own silhouette in black immediately beneath itself, so the shadow lands
+ * on whatever was drawn earlier and the pile gains real depth.
+ */
+const SHADOW = { dx: 3, dy: 4, alpha: 0.5 };
+
+/**
  * Draws physics bodies as pixel sprites.
  *
  * Two rules keep the art crisp:
@@ -33,9 +45,16 @@ export class FruitRenderer {
       seen.add(rec.uid);
       let s = this.sprites.get(rec.uid);
       if (!s) {
+        const shadow = new Sprite(this.frames[rec.tier][0]);
+        shadow.anchor.set(0.5);
+        shadow.tint = 0x000000;
+        shadow.alpha = SHADOW.alpha;
         s = new Sprite(this.frames[rec.tier][0]);
         s.anchor.set(0.5);
-        this.container.addChild(s);
+        s.shadow = shadow;
+        // Added as a pair, shadow first, so a fruit's shadow falls on the
+        // fruit drawn before it rather than sitting under the whole pile.
+        this.container.addChild(shadow, s);
         this.sprites.set(rec.uid, s);
       }
 
@@ -50,10 +69,15 @@ export class FruitRenderer {
       let frame = Math.round((a / (Math.PI * 2)) * ROT_FRAMES) % ROT_FRAMES;
       if (frame < 0) frame += ROT_FRAMES;
       const tex = this.frames[rec.tier][frame];
-      if (s.texture !== tex) s.texture = tex;
+      if (s.texture !== tex) {
+        s.texture = tex;
+        s.shadow.texture = tex;
+      }
 
       s.x = Math.round(x);
       s.y = Math.round(y);
+      s.shadow.x = s.x + SHADOW.dx;
+      s.shadow.y = s.y + SHADOW.dy;
 
       // Sprite scale composes two independent channels so neither stomps the
       // other: the spawn pop-in owned here, and `rec.fxSquash`, the impact
@@ -75,10 +99,12 @@ export class FruitRenderer {
       }
 
       s.scale.set(sx, sy);
+      s.shadow.scale.set(sx, sy);
     }
 
     for (const [uid, s] of this.sprites) {
       if (!seen.has(uid)) {
+        s.shadow.destroy();
         s.destroy();
         this.sprites.delete(uid);
       }
@@ -89,7 +115,10 @@ export class FruitRenderer {
   texture(tier, frame = 0) { return this.frames[tier][frame % ROT_FRAMES]; }
 
   clear() {
-    for (const s of this.sprites.values()) s.destroy();
+    for (const s of this.sprites.values()) {
+      s.shadow.destroy();
+      s.destroy();
+    }
     this.sprites.clear();
   }
 }

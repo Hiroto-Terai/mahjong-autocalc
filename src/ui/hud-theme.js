@@ -51,7 +51,20 @@ export function rampHex(a, b, steps) {
   return out;
 }
 
-/** Score lettering: hot cream at the top edge falling to deep gold. */
-export const RAMP_SCORE = rampHex(THEME.goldLite, 0xc4801e, 10);
-export const RAMP_TITLE = rampHex(THEME.cream, THEME.gold, 10);
-export const RAMP_DANGER = rampHex(0xffd6c0, 0xc4232f, 10);
+/**
+ * Typographic rule — obeyed by the HUD, the chain bar and both dialogs:
+ *
+ *   VALUES  are always the gold ramp with a 1px ink outline. Hierarchy comes
+ *           from the face (DISPLAY for the primary number, SMALL for the rest)
+ *           and from the size of the well around it, never from colour.
+ *   LABELS  are always flat THEME.dim in SMALL with a 1px ink shadow.
+ *   PROMPTS are always flat THEME.cream in SMALL with a 1px ink shadow.
+ *
+ * Before this rule the deck showed the same score in two faces and two
+ * colours eight texels apart; one colour per role is what stops that.
+ */
+export const RAMP_VALUE = rampHex(THEME.goldLite, 0xc4801e, 10);
+export const RAMP_VALUE_SMALL = rampHex(THEME.goldLite, 0xc4801e, 7);
+/** Headlines: brighter and cooler at the top than a value, so a dialog title
+ *  outranks the numbers under it without introducing a third hue. */
+export const RAMP_TITLE = rampHex(0xfffdf4, THEME.gold, 10);

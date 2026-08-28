@@ -15,8 +15,13 @@ import {
  */
 
 const DANGER_Y = BOARD.dangerY;
-/** Cool at rest, amber as the grace timer bites, red at the end of it. */
-const COLD = hex(0x54639a);
+/**
+ * Cool at rest, amber as the grace timer bites, red at the end of it. The
+ * resting colour is deliberately light: this line is the single most important
+ * read on the board and it sits on the darkest surface in the game, so a
+ * tasteful mid-blue disappears into the interior.
+ */
+const COLD = hex(0xa8bcf0);
 const WARM = hex(0xffb03c);
 const HOT = hex(0xff4038);
 /** Hazard markers: two texels of clearance above the line, inset from the glass. */
@@ -76,13 +81,13 @@ export class Scene {
     // Breathes slowly when idle, hammers when the run is about to end.
     const pulse = 0.5 + 0.5 * Math.sin(this.t * (0.004 + r * 0.017));
     const colour = toHex(dangerColour(r));
-    const alpha = Math.min(1, 0.30 + r * 0.30 + pulse * (0.10 + r * 0.36));
+    const alpha = Math.min(1, 0.72 + r * 0.16 + pulse * (0.08 + r * 0.12));
 
     this.glow.tint = colour;
     this.glow.alpha = r * 0.5 * (0.5 + pulse * 0.5);
 
     const bob = Math.round(pulse * 2 * r);
-    const face = Math.min(1, 0.24 + r * (0.5 + pulse * 0.26));
+    const face = Math.min(1, 0.6 + r * (0.2 + pulse * 0.2));
     for (const a of this.arrowPlates) {
       a.tint = 0x05070f;
       a.alpha = face * 0.7;
@@ -100,19 +105,19 @@ export class Scene {
     // End ticks: they anchor the line to the glass and give it a designed
     // terminal instead of a dash that happens to stop.
     for (const x of [BOARD.left, BOARD.right - 2]) {
-      g.rect(x, DANGER_Y - 2, 2, 5).fill({ color: colour, alpha: Math.min(1, alpha + 0.25) });
+      g.rect(x, DANGER_Y - 3, 2, 7).fill({ color: colour, alpha: 1 });
     }
 
     // Marching ants, and they march faster the closer the run is to over.
     const period = DASH + GAP;
     const phase = Math.floor(this.t * r * 0.055) % period;
-    const x0 = BOARD.left + 3;
-    const x1 = BOARD.right - 3;
+    const x0 = BOARD.left + 4;
+    const x1 = BOARD.right - 4;
     for (let x = x0 - phase; x < x1; x += period) {
       const a = Math.max(x0, x);
       const b = Math.min(x1, x + DASH);
       if (b <= a) continue;
-      g.rect(a, DANGER_Y + 1, b - a, 1).fill({ color: 0x05070f, alpha: 0.5 });
+      g.rect(a, DANGER_Y + 1, b - a, 1).fill({ color: 0x04060d, alpha: 0.75 });
       g.rect(a, DANGER_Y, b - a, 1).fill({ color: colour, alpha });
     }
   }

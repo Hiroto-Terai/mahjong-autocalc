@@ -152,15 +152,18 @@ export const DISPLAY = buildFace(DISPLAY_GLYPHS, 7, 10, DISPLAY_TRIM, 1);
 
 const hexRgb = (h) => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
 
-function glyphFor(face, ch) {
-  return face.glyphs.get(ch) || face.glyphs.get(ch.toUpperCase()) || face.glyphs.get(' ');
+function glyphFor(face, ch, mono) {
+  const g = face.glyphs.get(ch) || face.glyphs.get(ch.toUpperCase()) || face.glyphs.get(' ');
+  // Tabular figures: numbers that change every frame must not reflow, and a
+  // value drawn over a zero pad has to land in the pad's columns exactly.
+  return mono ? { mask: g.mask, left: 0, width: face.w } : g;
 }
 
 /** Width in texels of `text` in `face`, excluding any outline/shadow padding. */
-export function measure(text, face = SMALL) {
+export function measure(text, face = SMALL, mono = false) {
   let w = 0;
   for (let i = 0; i < text.length; i++) {
-    w += glyphFor(face, text[i]).width + (i < text.length - 1 ? face.tracking : 0);
+    w += glyphFor(face, text[i], mono).width + (i < text.length - 1 ? face.tracking : 0);
   }
   return w;
 }
@@ -173,13 +176,13 @@ export function measure(text, face = SMALL) {
  * survives landing on a bright fruit, and `shadow` drops a single offset copy.
  */
 export function textBuf(text, {
-  face = SMALL, colour = 0xffffff, ramp = null, outline = null, shadow = null,
+  face = SMALL, colour = 0xffffff, ramp = null, outline = null, shadow = null, mono = false,
 } = {}) {
   const pad = outline !== null ? 1 : 0;
   const sx = pad;
   const sy = pad;
   const shadowOff = shadow !== null ? 1 : 0;
-  const w = measure(text, face) + pad * 2 + shadowOff;
+  const w = measure(text, face, mono) + pad * 2 + shadowOff;
   const h = face.h + pad * 2 + shadowOff;
   const buf = new PixBuf(Math.max(1, w), h);
 
@@ -190,7 +193,7 @@ export function textBuf(text, {
   const stamp = (ox, oy, colourAt) => {
     let x = ox;
     for (let i = 0; i < text.length; i++) {
-      const g = glyphFor(face, text[i]);
+      const g = glyphFor(face, text[i], mono);
       for (let row = 0; row < face.h; row++) {
         const line = g.mask[row];
         for (let col = 0; col < g.width; col++) {
@@ -214,11 +217,13 @@ export function textBuf(text, {
     stamp(sx, sy, () => [255, 255, 255]);
     buf.data = save;
     ink.outline(hexRgb(outline));
+    const line = hexRgb(outline);
     for (let y = 0; y < buf.h; y++) {
       for (let x = 0; x < buf.w; x++) {
-        if (ink.alpha(x, y) && !(ink.get(x, y)[0] === 255 && ink.get(x, y)[1] === 255 && ink.get(x, y)[2] === 255)) {
-          buf.set(x, y, ink.get(x, y).slice(0, 3));
-        }
+        // Keep only the ring `outline()` added: the glyph body is stamped
+        // afterwards in its own colour.
+        const i = (y * ink.w + x) * 4;
+        if (ink.data[i + 3] && ink.data[i] !== 255) buf.set(x, y, line);
       }
     }
   }
@@ -267,16 +272,7 @@ export class BitmapText extends Sprite {
     const inkW = buf.w - pad * 2 - (this.opts.shadow != null ? 1 : 0);
     this.pivot.x = pad + Math.round(inkW * this._anchorX);
     this.pivot.y = pad;
-    this.inkWidth = inkW;
   }
 
   get text() { return this._key; }
-
-  /** Restyle in place; forces a rebuild on the next assignment. */
-  restyle(patch) {
-    this.opts = { ...this.opts, ...patch };
-    const t = this._key;
-    this._key = null;
-    if (t !== null) this.text = t;
-  }
 }
