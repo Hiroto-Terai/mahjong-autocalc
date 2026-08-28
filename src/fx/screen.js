@@ -1,39 +1,44 @@
-import { Container, Graphics, TilingSprite } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
 import { VIRTUAL_W, VIRTUAL_H } from '../config.js';
-import { quantAlpha, ditherTextures, DITHER_LEVELS } from './draw.js';
+import { THEME } from '../ui/hud-theme.js';
+import { quantAlpha } from './draw.js';
 
 const TAU = Math.PI * 2;
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const outQuad = (t) => 1 - (1 - t) ** 2;
 
-/** Alarm red. The only fully saturated colour the game ever puts on screen. */
-const ALARM = 0xff3b52;
+/** Alarm red, matching the HUD's danger stop. */
+const ALARM = THEME.danger;
 /** The cold wash that drains the board as the grace timer runs down. */
-const DRAIN = 0x2a3050;
+const DRAIN = 0x1a2340;
+/** The game-over sweep, in the same ink the panel scrim uses. */
+const CURTAIN = 0x0b1024;
 
 /**
- * Everything that happens to the whole screen rather than to a point on it:
- * the danger alarm, the game-over curtain, and full-viewport blowouts.
+ * Effects that act on the whole screen rather than on a point in it.
  *
- * All three are drawn as tiled ordered-dither masks rather than translucent
- * sheets. A 40%-alpha white rectangle over pixel art reads as fog; a Bayer
- * mask at 40% coverage reads as light, because every texel it touches is still
- * a fully-opaque colour from the palette — which is how a palette-limited
- * machine had to do it, and why it still looks right.
+ * Two surfaces, and the split matters more than anything else in this file:
+ *
+ *   boardDim  everything that washes the playfield — the danger drain, the
+ *             game-over sweep, blowouts. It sits *under* the HUD, so none of
+ *             it can touch the score deck or the chain bar.
+ *   overlay   the danger frame alone: a few texels of solid colour hugging the
+ *             screen edge, which never lands on a glyph.
+ *
+ * The washes are flat tints at quantised alpha, not ordered-dither screens.
+ * A dither mask over the entire board is the art bible's cardinal sin at
+ * maximum scale, it shreds any text it covers, and — worse for the game — it
+ * strips the hue out of the pile the player just spent a run building.
  */
 export class ScreenFx {
-  constructor(parent) {
-    this.layer = new Container();
-    parent.addChild(this.layer);
+  constructor(ctx) {
+    this.dim = new Graphics();
+    ctx.layers.boardDim.addChild(this.dim);
 
-    const veils = ditherTextures();
-    this.drain = new TilingSprite({ texture: veils[0], width: VIRTUAL_W, height: VIRTUAL_H });
-    this.curtain = new TilingSprite({ texture: veils[0], width: VIRTUAL_W, height: VIRTUAL_H });
-    this.blowout = new TilingSprite({ texture: veils[0], width: VIRTUAL_W, height: VIRTUAL_H });
+    this.frame = new Container();
+    ctx.layers.overlay.addChild(this.frame);
     this.gfx = new Graphics();
-    // Drain, then curtain, then blowout: the three can overlap during a run
-    // that ends on a big merge, and this is the order they resolve in.
-    this.layer.addChild(this.drain, this.curtain, this.blowout, this.gfx);
+    this.frame.addChild(this.gfx);
 
     this.reset();
   }
@@ -44,9 +49,7 @@ export class ScreenFx {
     this.phase = 0;
     this.overAge = -1;
     this.flash = null;
-    this.drain.visible = false;
-    this.curtain.visible = false;
-    this.blowout.visible = false;
+    this.dim.clear();
     this.gfx.clear();
   }
 
@@ -59,38 +62,35 @@ export class ScreenFx {
   }
 
   /**
-   * A whole-screen hit of light. `level` caps how much of the dither ramp it
-   * is allowed to reach — a watermelon whites the board out at the full eight,
-   * a big merge lifts it by one.
+   * A whole-screen hit of light, `peak` being its opening alpha. The board
+   * whites out for a watermelon and merely lifts for a big merge.
    */
-  blast(colour, life, level) {
-    this.flash = { colour, life, level, age: 0 };
+  blast(colour, life, peak) {
+    this.flash = { colour, life, peak, age: 0 };
   }
 
   update(dt) {
-    const g = this.gfx;
-    g.clear();
-    this._danger(dt, g);
-    this._curtain(dt, g);
+    this.dim.clear();
+    this.gfx.clear();
+    this._danger(dt);
+    this._curtain(dt);
     this._blowout(dt);
   }
 
-  _danger(dt, g) {
+  _danger(dt) {
     // Eased toward the reported ratio so a fruit rocking across the line does
     // not strobe the whole screen on and off.
     this.ratio += (this.target - this.ratio) * clamp(dt / 90, 0, 1);
     if (this.target === 0 && this.ratio < 0.01) this.ratio = 0;
 
     const d = this.ratio;
-    if (d <= 0.02 || this.overAge >= 0) {
-      if (this.drain.visible) this.drain.visible = false;
-      return;
-    }
+    if (d <= 0.02 || this.overAge >= 0) return;
 
     this.phase += dt * (0.0016 + d * 0.0056);
     const pulse = 0.5 + 0.5 * Math.sin(this.phase * TAU);
     const lit = quantAlpha(0.25 + d * 0.75 * (0.45 + pulse * 0.55));
     const thick = 1 + Math.round(d * 3 + pulse * 2);
+    const g = this.gfx;
 
     g.rect(0, 0, VIRTUAL_W, thick).fill({ color: ALARM, alpha: lit });
     g.rect(0, VIRTUAL_H - thick, VIRTUAL_W, thick).fill({ color: ALARM, alpha: lit });
@@ -107,55 +107,45 @@ export class ScreenFx {
       g.rect(right ? cx - 3 : cx, bottom ? cy - tooth : cy, 3, tooth).fill({ color: ALARM, alpha: lit });
     }
 
-    const level = Math.round(d * 2);
-    this.drain.visible = level > 0;
-    if (level > 0) {
-      this.drain.texture = ditherTextures()[clamp(level, 1, DITHER_LEVELS) - 1];
-      this.drain.tint = DRAIN;
-    }
+    // Cold drain, kept light on purpose: the point is that the board loses its
+    // warmth, not that it becomes unreadable at the moment it matters most.
+    this.dim.rect(0, 0, VIRTUAL_W, VIRTUAL_H)
+      .fill({ color: DRAIN, alpha: quantAlpha(d * 0.16) });
   }
 
-  _curtain(dt, g) {
-    if (this.overAge < 0) {
-      if (this.curtain.visible) this.curtain.visible = false;
-      return;
-    }
+  _curtain(dt) {
+    if (this.overAge < 0) return;
     this.overAge += dt;
-    // Held for a beat, then wiped down in whole 8px rows. An instant cut to
-    // black throws away the one moment the player wants to sit with.
+    // Held for a beat, then swept down in whole 8px rows. An instant cut to
+    // the results panel throws away the one moment the player wants to sit
+    // with, so this is the transition into the panel's own scrim — and it
+    // relaxes to nothing once that scrim has taken over, because two stacked
+    // dims would bury the pile the panel is there to show off.
     const t = clamp((this.overAge - 180) / 620, 0, 1);
     const h = Math.round((outQuad(t) * VIRTUAL_H) / 8) * 8;
     if (h <= 0) return;
 
-    this.curtain.visible = true;
-    this.curtain.texture = ditherTextures()[clamp(Math.round(2 + t * 4), 1, DITHER_LEVELS) - 1];
-    this.curtain.height = h;
-    this.curtain.tint = 0x0a0713;
-    // A lit leading edge makes the wipe a moving object rather than a
+    const handover = clamp((this.overAge - 900) / 500, 0, 1);
+    const alpha = quantAlpha(0.34 * (1 - handover));
+    if (alpha > 0) this.dim.rect(0, 0, VIRTUAL_W, h).fill({ color: CURTAIN, alpha });
+    // A lit leading edge makes the sweep a moving object rather than a
     // rectangle that happens to be getting taller.
     if (h < VIRTUAL_H) {
-      g.rect(0, h - 2, VIRTUAL_W, 1).fill({ color: 0x59204a, alpha: 0.8 });
-      g.rect(0, h - 1, VIRTUAL_W, 1).fill({ color: 0xb8446a, alpha: 1 });
+      this.dim.rect(0, h - 2, VIRTUAL_W, 1).fill({ color: 0x59204a, alpha: 0.8 });
+      this.dim.rect(0, h - 1, VIRTUAL_W, 1).fill({ color: 0xb8446a, alpha: 1 });
     }
   }
 
   _blowout(dt) {
     const f = this.flash;
-    if (!f) {
-      if (this.blowout.visible) this.blowout.visible = false;
-      return;
-    }
+    if (!f) return;
     f.age += dt;
     const t = f.age / f.life;
-    if (t >= 1) {
-      this.flash = null;
-      this.blowout.visible = false;
-      return;
-    }
-    // Squared falloff, or the blowout spends most of its life as a visible
-    // screen door instead of as a flash.
-    this.blowout.visible = true;
-    this.blowout.texture = ditherTextures()[clamp(Math.ceil((1 - t) ** 2 * f.level), 1, DITHER_LEVELS) - 1];
-    this.blowout.tint = f.colour;
+    if (t >= 1) { this.flash = null; return; }
+    // Squared falloff through hard alpha steps: a flash is a handful of frames
+    // at near-full opacity, not a long dissolve that parks a grey sheet on the
+    // board for half a second.
+    const a = quantAlpha(f.peak * (1 - t) ** 2);
+    if (a > 0) this.dim.rect(0, 0, VIRTUAL_W, VIRTUAL_H).fill({ color: f.colour, alpha: a });
   }
 }

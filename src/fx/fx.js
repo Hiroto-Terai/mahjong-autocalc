@@ -4,7 +4,7 @@ import { Particles } from './particles.js';
 import { makeText, tintText } from './pixfont.js';
 import { THEME } from '../ui/hud-theme.js';
 import { ScreenFx } from './screen.js';
-import { disc, ring, beadRing, spike, quantAlpha, paletteFor, DITHER_LEVELS } from './draw.js';
+import { disc, ring, beadRing, spike, quantAlpha, paletteFor } from './draw.js';
 
 /** Jar dust: cool neutrals, deliberately *not* fruit-coloured, so the player
  *  can tell a collision from a merge out of the corner of their eye. */
@@ -72,9 +72,9 @@ export class Fx {
     this.textLayer = new Container();
     layer.addChild(this.textLayer);
 
-    // Screen-space effects own the overlay layer; the banner goes in after
-    // them so the win text is never dimmed by its own blowout.
-    this.screen = new ScreenFx(ctx.layers.overlay);
+    // Screen-space washes go on boardDim, under the HUD; the win banner goes
+    // on overlay after them so it is never dimmed by its own blowout.
+    this.screen = new ScreenFx(ctx);
     this.banner = new Container();
     ctx.layers.overlay.addChild(this.banner);
 
@@ -395,7 +395,7 @@ export class Fx {
     // The top two merges get a single-step lift across the whole board — four
     // frames, one dither level. Anything longer or denser turns a late game
     // full of big merges into a strobe.
-    if (tier >= 8) this.screen.blast(npal.hot, 80, 1);
+    if (tier >= 8) this.screen.blast(npal.hot, 90, 0.22);
 
     // The new fruit pops out vertically as the parents pinch in horizontally.
     this.kickSquash(rec, -0.16 - 0.14 * power, 0, 1);
@@ -485,7 +485,7 @@ export class Fx {
     const SEED = 0x1d1024;
     const RIND = 0x8fd36a;
 
-    this.screen.blast(0xffffff, 150, DITHER_LEVELS);
+    this.screen.blast(0xffffff, 200, 1);
     this.addShake(7, 0, 1, 1100, 20);
     this.addShake(5, 1, 0, 900, 13);
 
@@ -541,7 +541,7 @@ export class Fx {
 
   onGameOver() {
     this.screen.gameOver();
-    this.screen.blast(0xff6a6a, 200, 5);
+    this.screen.blast(0xff6a6a, 220, 0.6);
     this.addShake(6, 0, 1, 700, 15);
     for (let i = 0; i < 24; i++) {
       this.parts.spawn({
