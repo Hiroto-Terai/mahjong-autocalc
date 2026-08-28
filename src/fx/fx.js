@@ -2,6 +2,7 @@ import { Container, Graphics, Sprite } from 'pixi.js';
 import { VIRTUAL_W, BOARD, FRUITS } from '../config.js';
 import { Particles } from './particles.js';
 import { makeText, tintText } from './pixfont.js';
+import { THEME } from '../ui/hud-theme.js';
 import { ScreenFx } from './screen.js';
 import { disc, ring, beadRing, spike, quantAlpha, paletteFor, DITHER_LEVELS } from './draw.js';
 
@@ -14,8 +15,20 @@ const DUST = [0xd2dcf2, 0x9aa9d0, 0x6d7ba6];
  *  and merges happen *on top of fruit* by definition. */
 const INK = 0x160c22;
 
-/** Score-popup colour ladder, indexed by combo depth. */
-const COMBO_TINTS = [0xffffff, 0xffe98a, 0xffc247, 0xff8a3c, 0xff5a6e, 0xff8ae0];
+/**
+ * Score-popup colour ladder, indexed by combo depth.
+ *
+ * It starts on the HUD's own cream rather than pure white so a single merge
+ * reads as part of the same interface as the score it is adding to, and climbs
+ * through the HUD's golds before leaving them for a chain. Nothing on this
+ * ladder is dim: a reward rendered in grey is not a reward.
+ */
+const COMBO_TINTS = [THEME.cream, THEME.goldLite, THEME.gold, 0xff9d4a, 0xff6a6a, 0xff8ae0];
+
+/** One outline for every floating string, matching the HUD's silhouette ink.
+ *  A coloured halo at display weight stops reading as an outline and starts
+ *  reading as a plate the text was exported on. */
+const TEXT_INK = THEME.ink;
 
 /** Where the watermelon banner lands: high in the jar, clear of the pile and
  *  clear of the score popups rising off the merge itself. */
@@ -197,13 +210,13 @@ export class Fx {
     let h = 0;
     let w = 0;
     for (const l of lines) {
-      const t = makeText(l.text, { fill: l.fill, outline: l.outline ?? 0x1b0f26, face: l.face });
+      const t = makeText(l.text, { fill: l.fill, outline: TEXT_INK, face: l.face });
       t.scale.set(l.scale);
       const lw = t.fxWidth * l.scale;
       t.y = h;
       rows.push({ t, w: lw, fill: l.fill });
       box.addChild(t);
-      h += t.fxHeight * l.scale + 2;
+      h += t.fxHeight * l.scale + 3;
       w = Math.max(w, lw);
     }
     for (const r of rows) r.t.x = Math.round((w - r.w) / 2);
@@ -219,7 +232,7 @@ export class Fx {
     p.box.x = clamp(Math.round(p.cx - p.w / 2), 3, VIRTUAL_W - p.w - 3);
     // Never let a popup climb into the HUD deck; a merge near the danger line
     // would otherwise fling its score behind the score plate.
-    p.box.y = Math.max(32, Math.round(p.y0 - p.rise * outCubic(p.age / p.life)));
+    p.box.y = Math.max(46, Math.round(p.y0 - p.rise * outCubic(p.age / p.life)));
     // The "punch" is a colour hit, not a scale hit: growing a bitmap glyph by
     // a non-integer factor is the one thing this whole module exists to avoid.
     const lit = p.age < p.punch;
@@ -274,20 +287,22 @@ export class Fx {
     // outlines read as a debug gizmo at this size; the ring has to have body.
     this.addRing({
       x, y,
-      r0: R * 1.05, r1: R * 1.05 + 24 + power * 78,
+      r0: R * 1.05, r1: Math.min(R * 1.05 + 24 + power * 78, R + 76),
       life: 230 + 220 * power,
-      thick0: 3 + Math.round(power * 6), thick1: 2,
-      colour: npal.light, edge: pal.shadow, lead: 0xffffff,
+      thick0: 5 + Math.round(power * 9), thick1: 3,
+      // Saturated body under a white edge. A pale body under a white edge is
+      // two whites, and the ring collapses to the 2px edge at any distance.
+      colour: pal.light, edge: pal.shadow, lead: 0xffffff,
     });
     // A second wave for anything past a grape, delayed so the two read as a
     // sequence rather than a thick band.
     if (tier >= 3) {
       this.addRing({
         x, y,
-        r0: R * 1.3, r1: R * 1.3 + 40 + power * 96,
+        r0: R * 1.3, r1: Math.min(R * 1.3 + 40 + power * 96, R + 100),
         life: 280 + 260 * power,
-        thick0: 3 + Math.round(power * 3), thick1: 2, delay: 70,
-        colour: pal.light, edge: pal.shadow, lead: npal.hot,
+        thick0: 4 + Math.round(power * 5), thick1: 2, delay: 70,
+        colour: npal.light, edge: pal.shadow, lead: 0xffffff,
       });
     }
 
@@ -303,7 +318,7 @@ export class Fx {
       x, y, count: 4,
       from: Math.round(R * 0.9), to: Math.round(R * 1.6 + 60 + power * 104),
       w0: 3 + Math.round(power * 4), w1: 1, delay: 40,
-      life: 210 + 150 * power, colour: npal.hot, spin: (tier % 2) * 0.32 + 0.39, alt: 1,
+      life: 210 + 150 * power, colour: pal.light, spin: (tier % 2) * 0.32 + 0.39, alt: 1,
     });
 
     // The two parents visibly implode. They are already gone from physics, so
@@ -339,34 +354,40 @@ export class Fx {
       const sp = base * (0.5 + Math.random() * 0.8);
       const roll = Math.random();
       this.parts.spawn({
-        x: x + Math.cos(a) * R * 1.15,
-        y: y + Math.sin(a) * R * 1.15,
+        // Launched from outside the new silhouette. A chunk that starts on the
+        // fruit spends its first frames as a stray texel on a saturated
+        // sprite, where it reads as a dead pixel rather than as debris.
+        x: x + Math.cos(a) * (R + 6),
+        y: y + Math.sin(a) * (R + 6),
         vx: Math.cos(a) * sp,
         // Biased upward, hard. A merge deep in the pile throws half its debris
         // into fruit that swallows it; the visible half is the half that flies.
         vy: Math.sin(a) * sp * 0.8 - 120 * power,
+        // No single-texel debris above a cherry merge: at 1x a lone texel at
+        // partial contrast is indistinguishable from a stuck pixel.
         size: roll < 0.34 ? (tier >= 6 ? 5 : tier >= 3 ? 4 : 3)
-          : roll < 0.8 ? (tier >= 6 ? 3 : 2) : 1,
-        // Skip the darkest stop: shadow-coloured chunks vanish into the jar.
-        // Every fourth chunk comes from a marking ramp where the fruit has one
-        // — a watermelon burst that throws only rind-green is half the fruit.
-        colour: pal.marks.length && i % 4 === 3
-          ? pal.marks[Math.floor(i / 4) % pal.marks.length]
-          : pal.stops[2 + ((i * 5 + tier) % 3)],
+          : roll < 0.8 ? (tier >= 6 ? 3 : 2) : (tier >= 2 ? 2 : 1),
+        // The two lightest stops of the fruit that was destroyed, so the burst
+        // is recognisably *that* fruit coming apart, plus every fourth chunk in
+        // the new fruit's hot stop to tie the debris to what replaced it. The
+        // dark stops are excluded outright — they vanish into the jar.
+        colour: i % 4 === 3 ? npal.hot : pal.stops[3 + ((i * 5 + tier) % 2)],
         life: 340 + Math.random() * 360 * (0.6 + power),
         gravity: 500,
         drag: 11,
         floorY: BOARD.floor - 1,
       });
     }
-    // A handful of blinking hot texels sell the flash without a glow sprite.
+    // Blinking white sparks hanging in the ring's wake. They are white and
+    // 2px because their whole job is to be unambiguously brighter than
+    // anything already on the board.
     for (let i = 0; i < 4 + tier * 2; i++) {
       const a = Math.random() * TAU;
-      const d = R * (1.0 + Math.random() * 0.7);
+      const d = R + 10 + Math.random() * R * 0.6;
       this.parts.spawn({
         x: x + Math.cos(a) * d, y: y + Math.sin(a) * d,
         vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 - 14,
-        size: 1, colour: npal.hot, life: 260 + Math.random() * 260,
+        size: 2, colour: 0xffffff, life: 260 + Math.random() * 260,
         gravity: 40, drag: 4, shrink: false, blink: 70,
       });
     }
@@ -377,7 +398,7 @@ export class Fx {
     if (tier >= 8) this.screen.blast(npal.hot, 80, 1);
 
     // The new fruit pops out vertically as the parents pinch in horizontally.
-    this.kickSquash(rec, -0.13 - 0.12 * power, 0, 1);
+    this.kickSquash(rec, -0.16 - 0.14 * power, 0, 1);
 
     this.addShake(1 + power * heat * 4.2, (Math.random() - 0.5) * 0.7, 1,
       220 + 260 * power, 26 - power * 8);
@@ -403,29 +424,38 @@ export class Fx {
   scorePopup({ tier, x, y, R, gained, combo, isNew, npal }) {
     const depth = clamp(combo - 1, 0, COMBO_TINTS.length - 1);
     const tint = COMBO_TINTS[depth];
-    // The two faces are the hierarchy; the integer scale is only the last
-    // step of it. A cherry's score in the display cut would shout as loudly as
-    // a melon's, which is the distinction the whole burst is built on.
-    const big = tier >= 6 || combo >= 4;
-    const face = tier >= 2 || combo >= 2 ? 'display' : 'small';
-    const scale = big ? 2 : 1;
+    // One face, one outline, one colour ladder for every score in the game;
+    // the only thing that varies is the integer scale. Two `+N` popups that
+    // differ in typeface or plate read as two different mechanics.
+    // Scale 2 is the floor from a grape upward: the smallest reward must not
+    // be the least legible thing on screen.
+    const scale = tier >= 8 || combo >= 4 ? 3 : tier >= 2 || combo >= 2 ? 2 : 1;
 
     // The final tier owns the banner line, so its score hangs below the fruit
     // instead of climbing into it.
     const under = tier === FRUITS.length - 1;
-    const lines = [];
-    // Discovery gets its own badge, except on the top tier where the banner
-    // already says it and the two would collide.
+    // Discovery gets a badge, except on the top tier where the banner already
+    // says it and the two would collide.
     const badge = isNew && tier > 0 && !under;
-    if (badge) lines.push({ text: 'NEW', face: 'small', scale, fill: 0xffe27a, outline: 0x3a2000 });
-    if (combo >= 2) {
-      lines.push({ text: `X${combo}`, face: 'display', scale: scale + 1, fill: tint, outline: 0x2a0c18 });
+    // Two lines, never three. A three-line stack over a merge is taller than
+    // the fruit it belongs to, and the eye stops being able to tell which
+    // line is the headline.
+    const lines = [];
+    // Lower-case x, not X: the capital is a symmetric cross that reads as a
+    // letter, and the multiplier is the last thing in the game that can afford
+    // to be misparsed.
+    const banner = combo >= 2 ? `${badge ? 'NEW ' : ''}x${combo}` : (badge ? 'NEW' : null);
+    if (banner) {
+      lines.push({
+        text: banner, face: 'display', fill: combo >= 2 ? tint : THEME.goldLite,
+        scale: combo >= 2 ? Math.min(3, scale + 1) : scale,
+      });
     }
-    lines.push({ text: `+${gained}`, face, scale, fill: tint });
+    lines.push({ text: `+${gained}`, face: 'display', scale, fill: tint });
 
-    this.popup(lines, x, under ? y + R + 34 : y - R - 10, {
+    this.popup(lines, x, under ? y + R + 36 : y - R - 20, {
       rise: under ? 12 : 22 + scale * 8,
-      life: 660 + scale * 120 + (combo >= 2 ? 140 : 0),
+      life: 680 + scale * 120 + (combo >= 2 ? 160 : 0),
       punch: 60 + depth * 20,
     });
 
@@ -433,7 +463,7 @@ export class Fx {
       // Chains earn their own ring so the escalation is visible, not just read.
       this.addRing({
         x, y, r0: R * 1.15, r1: R * 1.15 + 34 + depth * 18, life: 250 + depth * 40,
-        thick0: 3, thick1: 2, colour: tint, edge: 0x3a1020, lead: 0xffffff, delay: 50,
+        thick0: 3, thick1: 2, colour: tint, edge: THEME.ink, lead: 0xffffff, delay: 50,
       });
     }
 
@@ -442,7 +472,7 @@ export class Fx {
         const a = -Math.PI / 2 + (i / 11 - 0.5) * 2.8;
         this.parts.spawn({
           x, y: y - R * 0.4, vx: Math.cos(a) * 130, vy: Math.sin(a) * 130,
-          size: i % 3 === 0 ? 2 : 1, colour: i % 2 ? 0xffe27a : npal.hot,
+          size: 2, colour: i % 2 ? THEME.goldLite : npal.hot,
           life: 640, gravity: 200, drag: 5, shrink: false, blink: 90,
         });
       }
@@ -455,7 +485,7 @@ export class Fx {
     const SEED = 0x1d1024;
     const RIND = 0x8fd36a;
 
-    this.screen.blast(0xffffff, 220, DITHER_LEVELS);
+    this.screen.blast(0xffffff, 150, DITHER_LEVELS);
     this.addShake(7, 0, 1, 1100, 20);
     this.addShake(5, 1, 0, 900, 13);
 
@@ -500,7 +530,7 @@ export class Fx {
     }
 
     this.after(160, () => {
-      const text = makeText('WATERMELON', { fill: 0xfff6d0, outline: 0x2a0a12, face: 'display' });
+      const text = makeText('WATERMELON', { fill: THEME.cream, outline: TEXT_INK, face: 'display' });
       text.scale.set(2);
       text.x = Math.round((VIRTUAL_W - text.fxWidth * 2) / 2);
       text.y = BANNER_Y;
@@ -599,7 +629,9 @@ export class Fx {
           x: x + tx * dir * (2 + Math.random() * 5), y: y + ty * dir * 2,
           vx: (tx * dir - nx * lift) * sp,
           vy: (ty * dir - ny * lift) * sp,
-          size: k < 4 && strength > 0.3 ? 2 : 1,
+          // Two texels minimum unless the hit was feeble: a lone pale texel
+          // sitting on a saturated fruit reads as a dead pixel, not as dust.
+          size: strength > 0.25 ? 2 : 1,
           colour: DUST[k % DUST.length],
           life: 260 + strength * 320, gravity: 160, drag: 3, shrink: false,
         });
@@ -665,7 +697,10 @@ export class Fx {
       if (p.age >= p.life) { p.box.destroy({ children: true }); this.popups.splice(i, 1); continue; }
       this._placePopup(p);
       const t = p.age / p.life;
-      p.box.alpha = t < 0.6 ? 1 : quantAlpha(1 - (t - 0.6) / 0.4);
+      // Held opaque for most of its life, then dropped in three hard steps. A
+      // long linear fade parks the number at low contrast for half a second,
+      // which is exactly when it is still the thing the player is reading.
+      p.box.alpha = t < 0.72 ? 1 : quantAlpha(1 - (t - 0.72) / 0.28);
     }
     const b = this.bannerLife;
     if (b) {
@@ -702,8 +737,8 @@ export class Fx {
       const r = f.r * (1 + 0.12 * (1 - t)) - Math.round(t * f.r * 0.55);
       // Solid white for the first two frames, then the fruit's hot stop, then
       // only a rim. Holding white any longer starts to hide the new fruit.
-      if (t < 0.2) disc(g, f.x, f.y, r + 1, 0xffffff, 1);
-      else if (t < 0.45) disc(g, f.x, f.y, r, f.colour, 1 - (t - 0.2) * 1.4);
+      if (t < 0.12) disc(g, f.x, f.y, r + 1, 0xffffff, 1);
+      else if (t < 0.32) disc(g, f.x, f.y, r, f.colour, 1 - (t - 0.12) * 3);
       ring(g, f.x, f.y, r + 2, r, 0xffffff, 1 - t);
     }
   }
@@ -717,14 +752,17 @@ export class Fx {
       if (t >= 1) { this.rings.splice(i, 1); continue; }
       const e = burstOut(t);
       const rad = r.r0 + (r.r1 - r.r0) * e;
-      const a = t < 0.5 ? 1 : 1 - (t - 0.5) / 0.5;
+      const a = t < 0.45 ? 1 : 1 - (t - 0.45) / 0.55;
       const thick = Math.max(1, Math.round(r.thick0 + (r.thick1 - r.thick0) * e));
       if (r.bead) {
         beadRing(g, r.x, r.y, rad, INK, a, thick + 2);
         beadRing(g, r.x, r.y, rad, r.colour, a, thick);
         continue;
       }
-      ring(g, r.x, r.y, rad + 1, rad - thick - 1, INK, a);
+      // The ink border is a legibility device, not part of the shape: once the
+      // ring is half faded it is the only thing still visible, and a dark arc
+      // drifting across the jar reads as a stray line.
+      if (a > 0.5) ring(g, r.x, r.y, rad + 1, rad - thick - 1, INK, a);
       ring(g, r.x, r.y, rad, rad - thick, r.colour, a);
       // A hot leading edge is what separates an expanding wall of energy from
       // an outlined circle: the front two texels stay near-white while the
