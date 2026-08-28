@@ -144,4 +144,14 @@ export const COMBO = {
 export const DEFAULT_SEED = 0x5ca1ab1e;
 
 /* Named layer order for the Pixi scene graph. Modules attach to these. */
-export const LAYERS = ['background', 'jarBack', 'fruit', 'fx', 'jarFront', 'ui', 'overlay'];
+/**
+ * Scene graph layers, back to front.
+ *
+ * `boardDim` exists so a state overlay can darken the playfield without
+ * dimming the HUD on top of it: anything that dims the board belongs here,
+ * never on `overlay`, which sits above the UI and would render the score
+ * and chain bar illegible.
+ */
+export const LAYERS = [
+  'background', 'jarBack', 'fruit', 'fx', 'jarFront', 'boardDim', 'ui', 'overlay',
+];
