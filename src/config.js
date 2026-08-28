@@ -74,15 +74,54 @@ export const PHYSICS = {
   frictionStatic: 0.55,
   frictionAir: 0.0,
   density: 0.0012,
+  /** Matter takes mass from density*area, so one density makes mass grow with
+   *  r^2 — a melon only 6x a cherry. Real fruit go as volume, r^3, and that
+   *  difference is most of why a uniform-density pile feels like ping-pong
+   *  balls. Scaling density by (r/refRadius)^densityExponent restores it;
+   *  the reference tier keeps exactly the authored density. */
+  densityExponent: 1.0,
+  densityRefRadius: 20,
   slop: 0.02,
   /** Matter solver iterations — high, because stacked circles love to jitter. */
   positionIterations: 12,
   velocityIterations: 10,
   constraintIterations: 4,
-  /** Impulse applied to a freshly merged fruit so merges feel alive. */
+  /** Upward kick given to a freshly merged fruit so merges feel alive.
+   *  Divided by the merged fruit's mass relative to a mid-tier one, so a
+   *  watermelon appearing does not hop like a cherry. */
   mergePop: 0.9,
+  /** How much of the room a merged fruit needs is taken from its neighbours
+   *  by displacing them, rather than left for the solver to fight out.
+   *  1 = the new fruit is fully clear on the frame it is born. */
+  mergeRoom: 0.85,
+  /** The pop is scaled down by how boxed-in the merge is: this much overlap
+   *  with neighbours (in px, summed) kills it completely. */
+  mergeConfineSpan: 26,
   /** Fruits slower than this (px/s) are considered settled. */
   sleepSpeed: 6,
+  /** Steps of near-stillness before a fruit is parked. Matter measures this
+   *  against a 60Hz reference, so at our 120Hz step the real wait is 2x. */
+  sleepThreshold: 24,
+  /** A parked fruit stops being pushed apart, so anything sleeping while it
+   *  still overlaps a neighbour stays visibly sunk into it forever. Sleepers
+   *  deeper than this (px) are woken until the solver has separated them.
+   *  Below ~0.5 the pile starts cycling awake and settling takes longer. */
+  sleepOverlap: 0.6,
+  /** Steps between overlap audits. Cheap, but no reason to run it every step. */
+  sleepAuditEvery: 4,
+  /** Speed ceiling (px per 1/60s, Matter's velocity unit). A free fall from
+   *  the claw tops out near 17, so this never touches normal play — it exists
+   *  to cap the separation impulse when a fruit spawns inside a full jar. */
+  maxSpeed: 26,
+  /** ...and no fruit may cross more than this many radii per 1/60s, so a
+   *  cherry can never step clean through the far side of a wall. */
+  maxSpeedPerRadius: 2.6,
+  /** Spin ceiling (rad per 1/60s). */
+  maxSpin: 0.6,
+  /** Per-step bleed on spin only. Air drag would do this too, but it drags on
+   *  falling as well and fruit that fall slowly read as balloons. Damping the
+   *  spin alone is what stops a pile behaving like ball bearings. */
+  angularDamping: 0.06,
 };
 
 /* Drop mechanics. */

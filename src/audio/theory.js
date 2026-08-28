@@ -51,12 +51,23 @@ export function tierDegree(tier) {
  */
 export const COMBO_LIFT = 3;
 /** Degree 22 is E7. Above that a chime stops reading as musical and starts
- *  reading as a smoke alarm, so long chains widen instead of climbing. */
+ *  reading as a smoke alarm. */
 export const MAX_DEGREE = 22;
 
-export function mergeDegree(tier, combo = 1) {
-  const lift = Math.max(0, (combo | 0) - 1) * COMBO_LIFT;
-  return Math.min(MAX_DEGREE, tierDegree(tier) + lift);
+/**
+ * Where a merge lands, and how many octaves the run has already folded.
+ *
+ * A chain that keeps raising the tier climbs on its own (+3 lift beats the -2
+ * a bigger fruit costs). A chain of *same*-tier pairs would run off the top of
+ * the keyboard, so past E7 the run folds down an octave and keeps climbing —
+ * octave displacement, which the ear hears as the line continuing. Each fold
+ * is also returned so the voice can get wider rather than just repeating.
+ */
+export function mergeVoicing(tier, combo = 1) {
+  let degree = tierDegree(tier) + Math.max(0, (combo | 0) - 1) * COMBO_LIFT;
+  let folds = 0;
+  while (degree > MAX_DEGREE) { degree -= 5; folds++; }
+  return { degree, folds };
 }
 
 /**
@@ -73,8 +84,9 @@ export const PROGRESSION = [
 
 /** Descending i cadence for game over: E4 D4 C4 A3, settling on a low Am. */
 export const CADENCE = [19, 17, 15, 12];
-export const CADENCE_CHORD = [-12, 0, 3, 7];
+export const CADENCE_CHORD = [0, 12, 15, 19];
 
-/** Ascending pentatonic run then a wide Am for the watermelon fanfare. */
-export const FANFARE_RUN = [5, 7, 9, 10, 12, 14];
-export const FANFARE_CHORD = [-12, 0, 3, 7, 12];
+/** Ascending Am arpeggio (pentatonic degrees) then a wide Am voicing in
+ *  semitones, for the watermelon fanfare. */
+export const FANFARE_RUN = [5, 6, 8, 10, 11, 13];
+export const FANFARE_CHORD = [0, 12, 15, 19, 24];

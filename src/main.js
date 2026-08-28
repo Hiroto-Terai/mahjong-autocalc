@@ -74,10 +74,20 @@ async function boot() {
       render(alpha, frameMs);
       view.app.render();
     },
-    /** Advance the simulation by `ms` of game time without rendering. */
+    /**
+     * Advance `ms` of game time without drawing.
+     *
+     * Presentation subsystems are stepped alongside physics: they own pooled
+     * sprites that are only retired on update, so simulating without them
+     * accumulates effects that real play would have aged out long ago.
+     */
     advance(ms) {
       const n = Math.round(ms / PHYSICS.timeStep);
-      for (let i = 0; i < n; i++) ctx.game.update(PHYSICS.timeStep, stubInput);
+      for (let i = 0; i < n; i++) {
+        ctx.game.update(PHYSICS.timeStep, stubInput);
+        ctx.fx.update(PHYSICS.timeStep, ctx.game);
+        ctx.scene.update(PHYSICS.timeStep, ctx.game);
+      }
     },
     /** Advance presentation-only time (particles, tweens) without physics. */
     advanceFx(ms, sliceMs = PHYSICS.timeStep) {

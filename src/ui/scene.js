@@ -1,45 +1,123 @@
-import { Graphics } from 'pixi.js';
-import { VIRTUAL_W, VIRTUAL_H, BOARD } from '../config.js';
+import { Graphics, Sprite } from 'pixi.js';
+import { BOARD } from '../config.js';
+import { mix, hex, toHex } from '../art/palette.js';
+import {
+  buildBackground, buildJarBack, buildJarFront,
+  buildDangerGlow, buildDangerArrow, toTexture,
+} from './scene-textures.js';
 
 /**
- * Background and jar chrome. BASELINE — owned by the scene/art pass.
- * Draws a flat backdrop, the jar interior, and the danger line.
+ * The room, the jar, and the danger line.
+ *
+ * The static art is three baked textures — background, jar interior, jar
+ * glass — so the per-frame cost is only the danger line, which is the one
+ * thing here that actually animates.
  */
+
+const DANGER_Y = BOARD.dangerY;
+/** Cool at rest, amber as the grace timer bites, red at the end of it. */
+const COLD = hex(0x54639a);
+const WARM = hex(0xffb03c);
+const HOT = hex(0xff4038);
+/** Hazard markers: two texels of clearance above the line, inset from the glass. */
+const ARROW_X = [40, 273];
+const ARROW_Y = DANGER_Y - 7;
+/** Dash period: 6 lit, 4 dark. */
+const DASH = 6;
+const GAP = 4;
+
+const dangerColour = (r) => (r < 0.5 ? mix(COLD, WARM, r * 2) : mix(WARM, HOT, (r - 0.5) * 2));
+
 export class Scene {
   constructor(ctx) {
-    this.ctx = ctx;
     const layers = ctx.layers;
-    this.layers = layers;
-    ctx.events.on('danger', ({ ratio }) => { this.dangerRatio = ratio; });
-    this.bg = new Graphics();
-    this.front = new Graphics();
-    layers.background.addChild(this.bg);
-    layers.jarFront.addChild(this.front);
     this.dangerRatio = 0;
-    this.redraw();
-  }
+    this.t = 0;
 
-  redraw() {
-    const g = this.bg;
-    g.clear();
-    g.rect(0, 0, VIRTUAL_W, VIRTUAL_H).fill(0x141a2b);
-    // Jar interior
-    g.rect(BOARD.left, BOARD.top, BOARD.right - BOARD.left, BOARD.floor - BOARD.top).fill(0x1c2440);
-    // Jar walls
-    g.rect(BOARD.left - 3, BOARD.top, 3, BOARD.floor - BOARD.top + 3).fill(0x4a5a86);
-    g.rect(BOARD.right, BOARD.top, 3, BOARD.floor - BOARD.top + 3).fill(0x4a5a86);
-    g.rect(BOARD.left - 3, BOARD.floor, BOARD.right - BOARD.left + 6, 3).fill(0x4a5a86);
+    ctx.events.on('danger', ({ ratio }) => { this.dangerRatio = ratio; });
+    ctx.events.on('reset', () => { this.dangerRatio = 0; });
+
+    layers.background.addChild(sprite(buildBackground()));
+    layers.jarBack.addChild(sprite(buildJarBack()));
+    layers.jarFront.addChild(sprite(buildJarFront()));
+
+    // Haze that builds above the line: baked white, driven entirely by tint
+    // and alpha so escalating it costs nothing per frame.
+    this.glow = sprite(buildDangerGlow());
+    this.glow.x = BOARD.left;
+    this.glow.y = DANGER_Y - this.glow.height;
+    this.glow.alpha = 0;
+    layers.jarFront.addChild(this.glow);
+
+    // Each marker is a shadow plate under a face. Without the plate the glyph
+    // dissolves into whatever fruit happens to be sitting under the glass.
+    const arrowTex = toTexture(buildDangerArrow());
+    this.arrowPlates = [];
+    this.arrowFaces = [];
+    for (const list of [this.arrowPlates, this.arrowFaces]) {
+      for (const x of ARROW_X) {
+        const s = new Sprite(arrowTex);
+        s.x = x;
+        list.push(s);
+        layers.jarFront.addChild(s);
+      }
+    }
+
+    this.line = new Graphics();
+    layers.jarFront.addChild(this.line);
   }
 
   update(dtMs, game) {
-    void dtMs; void game;
-    const g = this.front;
+    this.t += dtMs;
+    // A finished run holds the line at full alarm rather than snapping it back
+    // to calm the instant the grace timer stops being read.
+    const r = game.state === 'over' ? 1 : this.dangerRatio;
+
+    // Breathes slowly when idle, hammers when the run is about to end.
+    const pulse = 0.5 + 0.5 * Math.sin(this.t * (0.004 + r * 0.017));
+    const colour = toHex(dangerColour(r));
+    const alpha = Math.min(1, 0.30 + r * 0.30 + pulse * (0.10 + r * 0.36));
+
+    this.glow.tint = colour;
+    this.glow.alpha = r * 0.5 * (0.5 + pulse * 0.5);
+
+    const bob = Math.round(pulse * 2 * r);
+    const face = Math.min(1, 0.24 + r * (0.5 + pulse * 0.26));
+    for (const a of this.arrowPlates) {
+      a.tint = 0x05070f;
+      a.alpha = face * 0.7;
+      a.y = ARROW_Y - bob + 1;
+    }
+    for (const a of this.arrowFaces) {
+      a.tint = colour;
+      a.alpha = face;
+      a.y = ARROW_Y - bob;
+    }
+
+    const g = this.line;
     g.clear();
-    // Danger line: dashed, and it heats up as the grace timer runs down.
-    const alpha = 0.35 + this.dangerRatio * 0.65;
-    const colour = this.dangerRatio > 0 ? 0xff5a5a : 0xffffff;
-    for (let x = BOARD.left; x < BOARD.right; x += 8) {
-      g.rect(x, BOARD.dangerY, 4, 1).fill({ color: colour, alpha });
+
+    // End ticks: they anchor the line to the glass and give it a designed
+    // terminal instead of a dash that happens to stop.
+    for (const x of [BOARD.left, BOARD.right - 2]) {
+      g.rect(x, DANGER_Y - 2, 2, 5).fill({ color: colour, alpha: Math.min(1, alpha + 0.25) });
+    }
+
+    // Marching ants, and they march faster the closer the run is to over.
+    const period = DASH + GAP;
+    const phase = Math.floor(this.t * r * 0.055) % period;
+    const x0 = BOARD.left + 3;
+    const x1 = BOARD.right - 3;
+    for (let x = x0 - phase; x < x1; x += period) {
+      const a = Math.max(x0, x);
+      const b = Math.min(x1, x + DASH);
+      if (b <= a) continue;
+      g.rect(a, DANGER_Y + 1, b - a, 1).fill({ color: 0x05070f, alpha: 0.5 });
+      g.rect(a, DANGER_Y, b - a, 1).fill({ color: colour, alpha });
     }
   }
+}
+
+function sprite(buf) {
+  return new Sprite(toTexture(buf));
 }

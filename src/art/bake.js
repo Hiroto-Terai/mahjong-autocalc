@@ -1,7 +1,7 @@
 import { Texture, Rectangle, ImageSource } from 'pixi.js';
 import { FRUITS } from '../config.js';
-import { FRUIT_ART } from './fruits.js';
-import { ramp, bayer, mix, toHex } from './palette.js';
+import { FRUIT_ART, detailFor } from './fruits.js';
+import { quantIndex, pick, bayer, mix, toHex } from './palette.js';
 import { PixBuf } from './canvas.js';
 
 /** Rotation frames baked per fruit. Higher = smoother spin, more VRAM. */
@@ -9,164 +9,158 @@ export const ROT_FRAMES = 24;
 
 /** Fixed key light, in screen space. Up-left-front, the pixel-art default. */
 const LIGHT = (() => {
-  const v = [-0.48, -0.62, 0.62];
+  const v = [-0.46, -0.62, 0.64];
   const len = Math.hypot(...v);
   return v.map((c) => c / len);
 })();
 
+/** Direction of the cool bounce rim: opposite the key, in screen space. */
+const BOUNCE = [0.64, 0.77];
+
+/** Ambient floor. Below this the unlit side stops holding its silhouette. */
+const AMBIENT = 0.17;
+
+/* Per size bracket (tiny .. huge). Detail has to scale with the sprite: an
+ * 8px-radius cherry has room for three shades and one highlight texel, and
+ * handing it the watermelon's settings is what turns small fruit into mud. */
+const STOPS = [3, 4, 5, 5, 5];
+/** Width, in texels, of the dithered ribbon either side of a stop boundary. */
+const DITHER_TEXELS = [0, 1.6, 2.2, 2.6, 3.0];
+/** Thickness of the bounce rim along the shadow edge, in texels. */
+const RIM_TEXELS = [1, 1, 1.5, 2, 2];
+
 /**
  * Render one fruit at one rotation into a PixBuf.
  *
- * The pipeline per texel:
- *   1. sphere normal from the disc coordinate
- *   2. lambert + rim term  -> continuous luminance
- *   3. multiply by the fruit's object-space albedo (rotated with the body)
- *   4. quantise onto a 5-stop ramp, Bayer-dithering across each boundary
- *   5. specular blob, then a 1px outline wrapped around the silhouette
+ *   1. object-space height field -> normal (so silhouette and shading agree)
+ *   2. lambert against the fixed key light -> continuous luminance
+ *   3. the fruit's own surface function picks a ramp and nudges luminance
+ *   4. quantise onto the ramp, dithering *only* across each stop boundary
+ *   5. bounce rim, specular blob, clipped surface markings, 1px outline
+ *   6. stems and leaves, outlined separately, composited on top
  */
 function renderFruit(tier, angle) {
   const def = FRUITS[tier];
   const art = FRUIT_ART[tier];
   const R = def.radius;
-  const pad = 2;
-  const size = R * 2 + pad * 2;
-  const buf = new PixBuf(size, size);
+  const d = detailFor(R);
+  const n = STOPS[d];
+  const ramps = art.stops.map((s) => pick(s, n));
+  const size = 2 * (R + art.pad);
   const cx = size / 2 - 0.5;
   const cy = size / 2 - 0.5;
+  const buf = new PixBuf(size, size);
+  const lit = new Float32Array(size * size);
 
-  const stops = ramp(art.shadow, art.light, 5, art.hueShift);
-  const ca = Math.cos(-angle), sa = Math.sin(-angle);
+  const ca = Math.cos(angle);
+  const sa = Math.sin(angle);
+  const proj = (u, v) => [cx + (u * ca - v * sa) * R, cy + (u * sa + v * ca) * R];
+
+  // A dither ribbon a fixed number of *texels* wide, whatever the sprite size:
+  // one ramp step spans about R/(n-1) texels down the terminator.
+  const band = Math.min(0.45, (0.4 * DITHER_TEXELS[d] * (n - 1)) / R);
+  const rimNz = Math.sqrt(Math.max(0, 1 - (1 - RIM_TEXELS[d] / R) ** 2));
+  const eps = 1 / R;
+  const H = art.height;
+  const surf = art.surf;
+
+  const c = {
+    d, R, u: 0, v: 0, px: 0, py: 0, lon: 0, lat: 0, uw: 0, vw: 0, add: 0,
+    proj,
+    solid: (x, y) => buf.alpha(x, y) > 0,
+    lit: (x, y) => lit[y * size + x] || 0,
+    ramp: (i) => ramps[Math.min(ramps.length - 1, i)],
+  };
 
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
       const dx = (px - cx) / R;
       const dy = (py - cy) / R;
-      const r2 = dx * dx + dy * dy;
-      if (r2 > 1) continue;
+      // Object space: the body's decoration spins, the key light does not.
+      const u = dx * ca + dy * sa;
+      const v = -dx * sa + dy * ca;
 
-      const nz = Math.sqrt(Math.max(0, 1 - r2));
-      // Lambert against the fixed key light.
-      let lum = dx * LIGHT[0] + dy * LIGHT[1] + nz * LIGHT[2];
-      lum = Math.max(0, lum);
-      // Ambient fill + a rim term so the dark side never goes flat.
-      const rim = Math.pow(1 - nz, 3) * 0.35;
-      lum = 0.18 + lum * 0.82 + rim;
+      const h = H(u, v);
+      if (h <= 0) continue;
 
-      // Object-space lookup for decoration.
-      const u = dx * ca - dy * sa;
-      const v = dx * sa + dy * ca;
-      lum *= art.albedo(u, v, { r: Math.sqrt(r2), nz });
+      let hu = (H(u + eps, v) - H(u - eps, v)) / (2 * eps);
+      let hv = (H(u, v + eps) - H(u, v - eps)) / (2 * eps);
+      hu = Math.max(-12, Math.min(12, hu));
+      hv = Math.max(-12, Math.min(12, hv));
+      const inv = 1 / Math.sqrt(1 + hu * hu + hv * hv);
+      // Gradient back to screen space; the light must not rotate with the body.
+      const nx = (-hu * ca + hv * sa) * inv;
+      const ny = (-hu * sa - hv * ca) * inv;
+      const nz = inv;
 
-      lum = Math.max(0, Math.min(1, lum));
+      const ndl = nx * LIGHT[0] + ny * LIGHT[1] + nz * LIGHT[2];
+      let lum = AMBIENT + Math.max(0, ndl) ** 0.85 * (1 - AMBIENT);
 
-      // Quantise with ordered dithering: find the ramp band, then let the
-      // Bayer threshold decide whether this texel rounds up or down.
-      const scaled = lum * (stops.length - 1);
-      const lo = Math.floor(scaled);
-      const frac = scaled - lo;
-      const idx = Math.min(stops.length - 1, lo + (frac > bayer(px, py) ? 1 : 0));
-      let col = stops[idx];
+      let rampIdx = 0;
+      if (surf) {
+        c.u = u; c.v = v; c.px = px; c.py = py; c.add = 0;
+        const cosLat = Math.sqrt(Math.max(0, 1 - v * v));
+        c.lat = Math.asin(Math.max(-1, Math.min(1, v)));
+        c.lon = Math.asin(Math.max(-1, Math.min(1, u / Math.max(cosLat, 1e-3))));
+        // Sphere-warped coordinates: markings compress toward the silhouette
+        // like a real surface curving away, instead of sliding off flat.
+        const rr = Math.hypot(u, v);
+        const w = rr > 1e-4 ? Math.asin(Math.min(1, rr)) / (rr * Math.PI * 0.5) : 0.6366;
+        c.uw = u * w; c.vw = v * w;
+        rampIdx = surf(c) | 0;
+        lum += c.add;
+      }
 
-      // Specular: a small, hard highlight offset toward the light.
-      const hx = dx + LIGHT[0] * 0.55;
-      const hy = dy + LIGHT[1] * 0.55;
-      const hd = Math.hypot(hx, hy);
-      const specR = 0.30;
-      if (hd < specR && nz > 0.35) {
-        const t = 1 - hd / specR;
-        if (t > 0.55 || (t > 0.28 && bayer(px, py) < t)) {
-          col = mix(col, [255, 255, 255], Math.min(0.85, 0.35 + t * 0.6));
-        }
+      lit[py * size + px] = lum;
+      const idx = quantIndex(lum, n, px, py, band);
+      let col = ramps[Math.min(ramps.length - 1, rampIdx)][idx];
+
+      // Cool bounce along the shadow edge: without it a dark fruit dissolves
+      // into the dark jar, and a flat dark edge is what kills the roundness.
+      if (nz < rimNz && ndl < 0.3 && nx * BOUNCE[0] + ny * BOUNCE[1] > 0.4) {
+        col = art.bounce;
       }
 
       buf.set(px, py, col, 255);
     }
   }
 
-  decorate(buf, tier, angle, R, cx, cy);
+  specular(buf, art, R, cx, cy, d);
+  if (art.surface) art.surface(buf, c);
   buf.outline(art.outline);
+
+  if (art.parts) {
+    const ov = new PixBuf(size, size);
+    art.parts(ov, c);
+    ov.outline(art.partOutline);
+    buf.blit(ov);
+  }
   return buf;
 }
 
-/** Overlays that are easier to draw explicitly than to express as albedo. */
-function decorate(buf, tier, angle, R, cx, cy) {
-  const art = FRUIT_ART[tier];
-  const ca = Math.cos(-angle), sa = Math.sin(-angle);
-  const size = buf.w;
-
-  const objToScreen = (u, v) => {
-    const c = Math.cos(angle), s = Math.sin(angle);
-    return [cx + (u * c - v * s) * R, cy + (u * s + v * c) * R];
-  };
-
-  // Watermelon stripes: drawn as object-space vertical bands, wrapped around
-  // the sphere so they taper correctly toward the silhouette.
-  if (art.stripe) {
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        if (buf.alpha(px, py) === 0) continue;
-        const dx = (px - cx) / R, dy = (py - cy) / R;
-        const r2 = dx * dx + dy * dy;
-        if (r2 > 1) continue;
-        const u = dx * ca - dy * sa;
-        const v = dx * sa + dy * ca;
-        // Spherical longitude so stripes compress at the edges like a real melon.
-        const lon = Math.asin(Math.max(-1, Math.min(1, u)));
-        const band = Math.sin(lon * art.stripe.count);
-        if (band > 0.55) {
-          const cur = buf.get(px, py);
-          buf.set(px, py, mix([cur[0], cur[1], cur[2]], art.stripe.colour, 0.72), 255);
-        }
-        void v;
-      }
-    }
-  }
-
-  // Melon netting.
-  if (art.net) {
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        if (buf.alpha(px, py) === 0) continue;
-        const dx = (px - cx) / R, dy = (py - cy) / R;
-        if (dx * dx + dy * dy > 0.96) continue;
-        const u = dx * ca - dy * sa;
-        const v = dx * sa + dy * ca;
-        const n = Math.abs(Math.sin(u * art.net.freq + Math.sin(v * 3.1)))
-                + Math.abs(Math.sin(v * art.net.freq * 0.8));
-        if (n > 1.72) {
-          const cur = buf.get(px, py);
-          buf.set(px, py, mix([cur[0], cur[1], cur[2]], art.net.colour, 0.6), 255);
-        }
-      }
-    }
-  }
-
-  // Seeds / speckles: deterministic per fruit so they do not swim between
-  // rotation frames — they are placed in object space and projected out.
-  if (art.speckle) {
-    const n = Math.max(4, Math.round(R * R * art.speckle.density));
-    let s = 0x9e3779b9 ^ (tier * 2654435761);
-    const rnd = () => {
-      s = (s ^ (s << 13)) >>> 0; s = (s ^ (s >>> 17)) >>> 0; s = (s ^ (s << 5)) >>> 0;
-      return s / 4294967296;
-    };
-    for (let i = 0; i < n; i++) {
-      const a = rnd() * Math.PI * 2;
-      const rr = Math.sqrt(rnd()) * 0.86;
-      const [sx, sy] = objToScreen(Math.cos(a) * rr, Math.sin(a) * rr);
-      buf.set(Math.round(sx), Math.round(sy), art.speckle.colour, 255);
-    }
-  }
-
-  // Citrus pores: dithered darker texels, no rotation needed (isotropic).
-  if (art.pore) {
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        if (buf.alpha(px, py) === 0) continue;
-        if (bayer(px * 3 + tier, py * 5) < art.pore.density) {
-          const cur = buf.get(px, py);
-          buf.set(px, py, mix([cur[0], cur[1], cur[2]], art.pore.colour, 0.35), 255);
-        }
+/**
+ * A hard specular blob, fixed in screen space.
+ *
+ * Blending a soft white gaussian is the other half of the downsampled-render
+ * look; this is a solid core with a single dithered fringe, sized by bracket.
+ */
+function specular(buf, art, R, cx, cy, d) {
+  const hx = cx + LIGHT[0] * R * 0.52;
+  const hy = cy + LIGHT[1] * R * 0.52;
+  const core = Math.max(0.7, R * 0.13);
+  const fringe = core + (d >= 2 ? 1.8 : 0.9);
+  const x0 = Math.floor(hx - fringe);
+  const x1 = Math.ceil(hx + fringe);
+  const y0 = Math.floor(hy - fringe);
+  const y1 = Math.ceil(hy + fringe);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (buf.alpha(x, y) === 0) continue;
+      const dist = Math.hypot(x - hx, y - hy);
+      if (dist <= core) {
+        buf.set(x, y, art.hi, 255);
+      } else if (dist <= fringe && bayer(x, y) < 0.45) {
+        buf.set(x, y, mix(buf.get(x, y), art.hi, 0.55), 255);
       }
     }
   }

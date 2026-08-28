@@ -18,8 +18,15 @@ import { PhysicsWorld } from '../src/physics/world.js';
 import { PHYSICS, BOARD, FRUITS, DROP, SPAWNABLE_TIERS } from '../src/config.js';
 import { makeRng } from '../src/core/rng.js';
 
+// Tuning sweeps: PROBE_TUNE='{"friction":0.5}' overrides the PHYSICS block
+// for this process only. Worlds are built lazily inside each suite, so the
+// override lands before any body exists.
+if (process.env.PROBE_TUNE) Object.assign(PHYSICS, JSON.parse(process.env.PROBE_TUNE));
+
 const DT = PHYSICS.timeStep;
-const PER_S = 1000 / DT; // Matter velocity is px/step; scale to px/s.
+// Matter 0.20 normalises body.velocity to a 60Hz delta regardless of the
+// step we run at, so px/s is velocity*60 — not velocity/timeStep.
+const PER_S = 60;
 
 /* ------------------------------------------------------------------ *
  * Simulation driver — mirrors Game's drop loop without its dependencies.
@@ -214,53 +221,66 @@ function suiteSettle() {
 }
 
 /**
- * Merge disturbance: a merge deep inside a packed pile must not launch it.
+ * Merge disturbance, measured on a pile that does not change when the tuning
+ * does.
  *
- * Same-tier neighbours merge on contact, so a settled pile never contains a
- * ready-made pair. We therefore take the deepest resting fruit of some tier
- * and teleport a *surface* fruit of the same tier onto it, then push the pair
- * through the world's own merge path — the merged body is then born exactly
- * where a buried fruit was, which is the case that explodes piles. The donor
- * comes from the surface so removing it perturbs nothing.
+ * A pile grown from drops rearranges itself differently for every parameter,
+ * so it cannot compare two builds. Instead we suppress merging, pack the jar
+ * with one uniform tier, let it settle, and then hand the world a single
+ * hand-picked pair at the very bottom. The merged fruit is born a full tier
+ * larger in the most crowded spot there is — the case that launches piles.
  */
 function suiteMerge() {
-  console.log('\n[merge] forced merge at the bottom of a settled pile');
+  console.log('\n[merge] forced merge at the bottom of a fixed, packed jar');
+  const TIER = 4;
   const sim = new Sim();
-  buildPile(sim, 36);
-  sim.advance(5000);
-
-  const list = recs(sim);
-  const byTier = new Map();
-  for (const r of list) {
-    if (r.tier >= FRUITS.length - 1) continue;
-    if (!byTier.has(r.tier)) byTier.set(r.tier, []);
-    byTier.get(r.tier).push(r);
+  const r = FRUITS[TIER].radius;
+  const cols = Math.floor((BOARD.right - BOARD.left) / (r * 2));
+  const x0 = BOARD.left + (BOARD.right - BOARD.left - cols * r * 2) / 2 + r;
+  for (let row = 0; row < 7; row++) {
+    for (let c = 0; c < cols; c++) {
+      sim.world.spawn(TIER, x0 + c * r * 2 + (row % 2 ? 3 : 0), BOARD.floor - r - row * r * 2.1);
+    }
   }
-  let pick = null;
-  for (const [tier, group] of [...byTier].sort((a, b) => b[0] - a[0])) {
-    if (group.length < 2) continue;
-    const sorted = [...group].sort((a, b) => b.body.position.y - a.body.position.y);
-    pick = { tier, deep: sorted[0], donor: sorted[sorted.length - 1] };
-    break;
+  // Merging off while it settles: a uniform pile would otherwise collapse into
+  // one fruit before the measurement starts. Restored for exactly one pair.
+  const resolve = sim.world._resolveMerges;
+  sim.world._resolveMerges = function () { this._pending.length = 0; };
+  for (let i = 0; i < Math.round(5000 / DT); i++) sim.world.step(DT);
+
+  const list = recs(sim).sort((a, b) => b.body.position.y - a.body.position.y);
+  let pair = null;
+  outer: for (const a of list) {
+    for (const b of list) {
+      if (a === b) continue;
+      const d = Math.hypot(a.body.position.x - b.body.position.x, a.body.position.y - b.body.position.y);
+      if (d < a.radius + b.radius + 1.5) { pair = [a, b]; break outer; }
+    }
   }
-  if (!pick) { report('merge', 'no candidate pair', 'skipped'); return; }
+  if (!pair) { report('merge', 'no candidate pair', 'skipped'); return; }
 
-  const { deep, donor } = pick;
-  const target = { x: deep.body.position.x, y: deep.body.position.y };
-  const before = snapshot(sim).filter((s) => s.uid !== deep.uid && s.uid !== donor.uid);
-  const keBefore = kinetic(sim).ke;
+  const before = snapshot(sim).filter((s) => s.uid !== pair[0].uid && s.uid !== pair[1].uid);
+  report('merge', 'pile', list.length, 'bodies');
+  report('merge', 'depth of merge', pair[0].body.position.y, 'px');
+  report('merge', 'KE before merge', kinetic(sim).ke);
 
-  Matter.Body.setPosition(donor.body, { x: target.x + 0.5, y: target.y + 0.5 });
-  Matter.Body.setVelocity(donor.body, { x: 0, y: 0 });
-  sim.world._pending.push([deep, donor]);
-
-  let peakKe = 0;
-  let peakSpeed = 0;
-  for (let i = 0; i < Math.round(1500 / DT); i++) {
+  sim.world._resolveMerges = resolve;
+  sim.world._pending.push(pair);
+  // A pile *should* fall into the hole a merge leaves — that is gravity, and
+  // it dominates total energy. What must not happen is a launch, so the
+  // explosion metrics are the first few frames (before a collapse can build
+  // speed) and any upward motion at all across the whole window.
+  let burstKe = 0, peakSpeed = 0, peakOverlap = 0, peakUp = 0;
+  const steps = Math.round(1500 / DT);
+  const burst = Math.round(100 / DT);
+  for (let i = 0; i < steps; i++) {
     sim.world.step(DT);
+    sim.world._resolveMerges = function () { this._pending.length = 0; };
     const k = kinetic(sim);
-    peakKe = Math.max(peakKe, k.ke);
+    if (i < burst) burstKe = Math.max(burstKe, k.ke);
     peakSpeed = Math.max(peakSpeed, k.max);
+    for (const r2 of recs(sim)) peakUp = Math.max(peakUp, -r2.body.velocity.y * PER_S);
+    peakOverlap = Math.max(peakOverlap, penetration(sim).pair);
   }
   const after = new Map(snapshot(sim).map((s) => [s.uid, s]));
   let maxMove = 0, sumMove = 0, n = 0;
@@ -271,42 +291,57 @@ function suiteMerge() {
     maxMove = Math.max(maxMove, d);
     sumMove += d; n++;
   }
-  report('merge', 'merged tier', pick.tier + 1, '');
-  report('merge', 'depth of merge', target.y, 'px');
-  report('merge', 'KE before merge', keBefore);
-  report('merge', 'peak KE after merge', peakKe);
+  report('merge', 'burst KE (first 100ms)', burstKe);
+  report('merge', 'peak upward speed', peakUp, 'px/s');
   report('merge', 'peak speed after merge', peakSpeed, 'px/s');
   report('merge', 'max neighbour displacement', maxMove, 'px');
   report('merge', 'mean neighbour displacement', n ? sumMove / n : 0, 'px');
-  report('merge', 'max pair overlap after', penetration(sim).pair, 'px');
+  report('merge', 'peak overlap during window', peakOverlap, 'px');
+  report('merge', 'settled overlap after', penetration(sim).pair, 'px');
 }
 
 /**
  * The same question asked across a whole run: every merge that happens
- * naturally, measured for the energy it injects into everything else.
+ * naturally, measured for the energy it injects into the *resting* pile.
+ * Only fruit that were already asleep at the moment of the merge are counted,
+ * so a falling drop's own energy never pollutes the number.
  */
 function suiteMergeRun() {
   console.log('\n[mergeRun] disturbance of every merge in a 60-drop run');
   const sim = new Sim(0xfeedface);
   const windows = [];
+  const restingKe = (uids) => {
+    let ke = 0;
+    for (const uid of uids) {
+      const r = sim.world.fruits.get(uid);
+      if (!r) continue;
+      const v = Math.hypot(r.body.velocity.x, r.body.velocity.y) * PER_S;
+      ke += 0.5 * r.body.mass * v * v;
+    }
+    return ke;
+  };
   sim.world.onMerge = (m) => {
-    windows.push({ left: Math.round(400 / DT), uid: m.rec.uid, peak: 0, base: kinetic(sim).ke });
+    const uids = [];
+    for (const r of recs(sim)) {
+      if (r.uid === m.rec.uid) continue;
+      if (Math.hypot(r.body.velocity.x, r.body.velocity.y) * PER_S < 12) uids.push(r.uid);
+    }
+    windows.push({ left: Math.round(500 / DT), uids, peak: 0, base: restingKe(uids) });
   };
   const span = BOARD.right - BOARD.left - 60;
   for (let i = 0; i < 60; i++) {
     sim.drop(BOARD.left + 30 + ((i * 97) % span));
     for (let s = 0; s < Math.round(DROP.cooldown / DT); s++) {
       sim.world.step(DT);
-      const ke = kinetic(sim).ke;
       for (const w of windows) {
         if (w.left <= 0) continue;
         w.left--;
-        w.peak = Math.max(w.peak, ke);
+        w.peak = Math.max(w.peak, restingKe(w.uids));
       }
     }
   }
   const deltas = windows.map((w) => w.peak - w.base).sort((a, b) => a - b);
-  const pct = (q) => deltas.length ? deltas[Math.min(deltas.length - 1, Math.floor(q * deltas.length))] : 0;
+  const pct = (q) => (deltas.length ? deltas[Math.min(deltas.length - 1, Math.floor(q * deltas.length))] : 0);
   report('mergeRun', 'merges', windows.length, '');
   report('mergeRun', 'median KE injected', pct(0.5));
   report('mergeRun', 'p90 KE injected', pct(0.9));
@@ -333,6 +368,35 @@ function suiteLoad() {
   report('load', 'max wall overlap', pen.wall, 'px');
   report('load', 'KE after 6s', k.ke);
   report('load', 'max speed after 6s', k.max, 'px/s');
+}
+
+/** A heavy fruit landing on light ones must crush the pile, not scatter it. */
+function suiteHeavy() {
+  console.log('\n[heavy] a melon dropped onto a bed of cherries');
+  const sim = new Sim();
+  for (let i = 0; i < 18; i++) {
+    sim.world.spawn(0, BOARD.left + 12 + (i % 9) * 30, BOARD.floor - 10 - Math.floor(i / 9) * 20);
+  }
+  sim.advance(2500);
+  const before = new Map(snapshot(sim).map((s) => [s.uid, s]));
+  const melon = sim.world.spawn(9, (BOARD.left + BOARD.right) / 2, BOARD.top + 20);
+  let peakPen = 0, peakSpeed = 0;
+  for (let i = 0; i < Math.round(3000 / DT); i++) {
+    sim.world.step(DT);
+    peakPen = Math.max(peakPen, penetration(sim).pair);
+    peakSpeed = Math.max(peakSpeed, kinetic(sim).max);
+  }
+  let scatter = 0;
+  for (const s of snapshot(sim)) {
+    const b = before.get(s.uid);
+    if (b) scatter = Math.max(scatter, Math.hypot(s.x - b.x, s.y - b.y));
+  }
+  report('heavy', 'melon mass / cherry mass', melon.body.mass / FRUITS[0].radius ** 0 / (sim.world.fruits.values().next().value.body.mass), 'x');
+  report('heavy', 'peak overlap on impact', peakPen, 'px');
+  report('heavy', 'peak speed on impact', peakSpeed, 'px/s');
+  report('heavy', 'max cherry displacement', scatter, 'px');
+  report('heavy', 'settled overlap', penetration(sim).pair, 'px');
+  report('heavy', 'KE at rest', kinetic(sim).ke);
 }
 
 /** Tunnelling: terminal-velocity drops must not pass through the floor. */
@@ -432,6 +496,7 @@ const SUITES = {
   merge: suiteMerge,
   mergeRun: suiteMergeRun,
   load: suiteLoad,
+  heavy: suiteHeavy,
   tunnel: suiteTunnel,
   roll: suiteRoll,
   determinism: suiteDeterminism,

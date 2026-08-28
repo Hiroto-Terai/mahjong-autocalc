@@ -52,10 +52,10 @@ const GLYPHS = {
   ' ': '...|...|...|...|...',
 };
 
-export const GLYPH_W = 3;
-export const GLYPH_H = 5;
+const GLYPH_W = 3;
+const GLYPH_H = 5;
 /** 1px letterspacing keeps 3-wide glyphs from fusing into a solid bar. */
-export const TRACKING = 1;
+const TRACKING = 1;
 
 /** Two masks per glyph: the fill, and a 1px-dilated silhouette behind it.
  *  Baking the outline separately means the caller can tint body and outline
@@ -113,25 +113,24 @@ function bake() {
   return out;
 }
 
-export function glyphs() {
+function glyphs() {
   if (!CACHE) CACHE = bake();
   return CACHE;
 }
 
-export const textWidth = (str, scale = 1) =>
-  Math.max(0, str.length * (GLYPH_W + TRACKING) - TRACKING) * scale;
-
 /**
- * Build a container holding one string. Scale must stay integral — a 1.5x
- * bitmap glyph produces uneven stem widths, which is exactly the artefact the
- * whole art direction exists to avoid.
+ * Build a container holding one string, always at 1:1.
  *
- * The container's own position is the string's top-left; `centre()` recentres.
+ * Callers enlarge it by setting an integer scale on the returned container:
+ * every glyph inside sits at a whole-texel offset, so an integer container
+ * scale keeps the whole string on the texel grid. A fractional one would give
+ * the same string uneven stem widths, which is the artefact this font exists
+ * to avoid.
  */
-export function makeText(str, { scale = 1, fill = 0xffffff, outline = 0x1a0e20 } = {}) {
+export function makeText(str, { fill = 0xffffff, outline = 0x1a0e20 } = {}) {
   const box = new Container();
   const g = glyphs();
-  const step = (GLYPH_W + TRACKING) * scale;
+  const step = GLYPH_W + TRACKING;
   const halos = new Container();
   const fills = new Container();
   box.addChild(halos, fills);
@@ -141,28 +140,24 @@ export function makeText(str, { scale = 1, fill = 0xffffff, outline = 0x1a0e20 }
     const x = i * step;
 
     const h = new Sprite(glyph.halo);
-    h.x = x - scale;
-    h.y = -scale;
-    h.scale.set(scale);
+    h.x = x - 1;
+    h.y = -1;
     h.tint = outline;
     halos.addChild(h);
 
     const f = new Sprite(glyph.fill);
     f.x = x;
-    f.scale.set(scale);
     f.tint = fill;
     fills.addChild(f);
   }
 
-  box.fxWidth = textWidth(str, scale);
-  box.fxHeight = GLYPH_H * scale;
+  box.fxWidth = Math.max(0, str.length * step - TRACKING);
+  box.fxHeight = GLYPH_H;
   box.fxFills = fills;
-  box.fxHalos = halos;
   return box;
 }
 
 /** Recolour a string built by `makeText` without rebuilding its sprites. */
-export function tintText(box, fill, outline) {
+export function tintText(box, fill) {
   for (const s of box.fxFills.children) s.tint = fill;
-  if (outline !== undefined) for (const s of box.fxHalos.children) s.tint = outline;
 }
